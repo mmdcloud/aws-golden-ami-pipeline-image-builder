@@ -1,1 +1,0 @@
-variable "topic_name" {}

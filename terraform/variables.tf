@@ -10,3 +10,8 @@ variable "subnet_id" {
   type        = string
   default     = "us-east-1a"
 }
+
+variable "notification_email" {
+  type    = string
+  default = "madmaxcloudonline@gmail.com"
+}

@@ -1,6 +1,8 @@
 data "aws_caller_identity" "current" {}
 
+# --------------------------------------------------------------------------------
 # IAM Role for EC2 Image Builder
+# --------------------------------------------------------------------------------
 resource "aws_iam_role" "image_builder" {
   name = "EC2ImageBuilderRole"
 
@@ -33,7 +35,9 @@ resource "aws_iam_instance_profile" "image_builder" {
   role = aws_iam_role.image_builder.name
 }
 
+# --------------------------------------------------------------------------------
 # Security Groups for Image Builder instances
+# --------------------------------------------------------------------------------
 resource "aws_security_group" "image_builder" {
   name        = "image-builder-sg"
   description = "Allow outbound traffic for Image Builder"
@@ -50,13 +54,17 @@ resource "aws_security_group" "image_builder" {
   }
 }
 
+# --------------------------------------------------------------------------------
 # S3 Bucket for build artifacts
+# --------------------------------------------------------------------------------
 module "ami_artifacts" {
   source      = "./modules/s3"
   bucket_name = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
 }
 
+# --------------------------------------------------------------------------------
 # Image Builder Infrastructure
+# --------------------------------------------------------------------------------
 resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   name                          = "golden-ami-config"
   description                   = "Infrastructure config for Golden AMI builds"
@@ -74,7 +82,9 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   }
 }
 
+# --------------------------------------------------------------------------------
 # Golden AMI Recipe
+# --------------------------------------------------------------------------------
 resource "aws_imagebuilder_image_recipe" "base_linux" {
   name         = "base-linux-recipe"
   parent_image = "arn:aws:imagebuilder:${var.primary_region}:aws:image/amazon-linux-2-x86/x.x.x"
@@ -107,7 +117,9 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   }
 }
 
+# --------------------------------------------------------------------------------
 # Custom Component for Security Hardening
+# --------------------------------------------------------------------------------
 resource "aws_imagebuilder_component" "security_hardening" {
   name     = "security-hardening"
   platform = "Linux"
@@ -139,7 +151,9 @@ phases:
 EOF
 }
 
+# --------------------------------------------------------------------------------
 # Distribution Settings
+# --------------------------------------------------------------------------------
 resource "aws_imagebuilder_distribution_configuration" "multi_region" {
   name = "multi-region-distribution"
 
@@ -180,7 +194,9 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
   }
 }
 
+# --------------------------------------------------------------------------------
 # Image Pipeline
+# --------------------------------------------------------------------------------
 resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   name                             = "golden-ami-pipeline"
   description                      = "Pipeline for building Golden AMIs"
@@ -202,23 +218,35 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   }
 }
 
+# --------------------------------------------------------------------------------
 # EventBridge Rule for AMI Creation Notifications
+# --------------------------------------------------------------------------------
 module "eventbridge_rule" {
-  source        = "./modules/eventbridge"
-  rule_name     = "ami-creation-event"
-  description   = "Capture AMI creation events"
-  event_pattern = <<EOF
-{
-  "source": ["aws.imagebuilder"],
-  "detail-type": ["Image Builder Image State Change"]
-}
-EOF 
-  target_id     = "SendToSNS"
-  target_arn    = module.notification_topic.arn
+  source           = "./modules/eventbridge"
+  rule_name        = "ami-creation-event"
+  description = "Capture AMI creation events"
+  event_pattern = jsonencode({
+    source = [
+      "aws.imagebuilder"
+    ]
+    detail-type = [
+      "Image Builder Image State Change"
+    ]
+  })
+  target_id  = "SendToSNS"
+  target_arn = module.ami_events_sns.topic_arn
 }
 
+# --------------------------------------------------------------------------------
 # SNS Topic
-module "notification_topic" {
+# --------------------------------------------------------------------------------
+module "ami_events_sns" {
   source     = "./modules/sns"
   topic_name = "ami-creation-notifications"
+  subscriptions = [
+    {
+      protocol = "email"
+      endpoint = var.notification_email
+    }
+  ]
 }
