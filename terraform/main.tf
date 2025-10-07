@@ -1,3 +1,7 @@
+
+# --------------------------------------------------------------------------------
+# Getting project information
+# --------------------------------------------------------------------------------
 data "aws_caller_identity" "current" {}
 
 # --------------------------------------------------------------------------------
@@ -57,9 +61,22 @@ resource "aws_security_group" "image_builder" {
 # --------------------------------------------------------------------------------
 # S3 Bucket for build artifacts
 # --------------------------------------------------------------------------------
+
 module "ami_artifacts" {
-  source      = "./modules/s3"
-  bucket_name = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
+  source        = "./modules/s3"
+  bucket_name   = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
+  objects       = []
+  bucket_policy = ""
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = true
 }
 
 # --------------------------------------------------------------------------------
@@ -73,7 +90,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   security_group_ids            = [aws_security_group.image_builder.id]
   subnet_id                     = var.subnet_id
   terminate_instance_on_failure = true
-
+  key_pair                      = var.key_pair_name
   logging {
     s3_logs {
       s3_bucket_name = module.ami_artifacts.id
@@ -203,15 +220,12 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   image_recipe_arn                 = aws_imagebuilder_image_recipe.base_linux.arn
   infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.golden_ami.arn
   distribution_configuration_arn   = aws_imagebuilder_distribution_configuration.multi_region.arn
-
   schedule {
     schedule_expression                = "cron(0 0 ? * SUN *)" # Weekly builds
     pipeline_execution_start_condition = "EXPRESSION_MATCH_AND_DEPENDENCY_UPDATES_AVAILABLE"
   }
-
   enhanced_image_metadata_enabled = true
   status                          = "ENABLED"
-
   image_tests_configuration {
     image_tests_enabled = true
     timeout_minutes     = 60
@@ -222,8 +236,8 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
 # EventBridge Rule for AMI Creation Notifications
 # --------------------------------------------------------------------------------
 module "eventbridge_rule" {
-  source           = "./modules/eventbridge"
-  rule_name        = "ami-creation-event"
+  source      = "./modules/eventbridge"
+  rule_name   = "ami-creation-event"
   description = "Capture AMI creation events"
   event_pattern = jsonencode({
     source = [

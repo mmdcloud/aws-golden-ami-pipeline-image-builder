@@ -4,5 +4,5 @@ output "image_pipeline_arn" {
 }
 
 output "sns_topic_arn" {
-  value = module.notification_topic.arn
+  value = module.ami_events_sns.topic_arn
 }
