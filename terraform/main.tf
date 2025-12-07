@@ -61,7 +61,6 @@ resource "aws_security_group" "image_builder" {
 # --------------------------------------------------------------------------------
 # S3 Bucket for build artifacts
 # --------------------------------------------------------------------------------
-
 module "ami_artifacts" {
   source        = "./modules/s3"
   bucket_name   = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
