@@ -4,12 +4,33 @@
 # --------------------------------------------------------------------------------
 data "aws_caller_identity" "current" {}
 
+# -----------------------------------------------------------------------------------------
+# VPC Configuration
+# -----------------------------------------------------------------------------------------
+module "image_builder_vpc" {
+  source                  = "./modules/vpc"
+  vpc_name                = "image-builder-vpc"
+  vpc_cidr                = "10.0.0.0/16"
+  azs                     = var.azs
+  public_subnets          = var.public_subnets
+  private_subnets         = var.private_subnets
+  enable_dns_hostnames    = true
+  enable_dns_support      = true
+  create_igw              = true
+  map_public_ip_on_launch = true
+  enable_nat_gateway      = true
+  single_nat_gateway      = false
+  one_nat_gateway_per_az  = true
+  tags = {
+    Name     = "image-builder-vpc"
+  }
+}
+
 # --------------------------------------------------------------------------------
 # IAM Role for EC2 Image Builder
 # --------------------------------------------------------------------------------
 resource "aws_iam_role" "image_builder" {
   name = "EC2ImageBuilderRole"
-
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -42,19 +63,22 @@ resource "aws_iam_instance_profile" "image_builder" {
 # --------------------------------------------------------------------------------
 # Security Groups for Image Builder instances
 # --------------------------------------------------------------------------------
-resource "aws_security_group" "image_builder" {
-  name        = "image-builder-sg"
-  description = "Allow outbound traffic for Image Builder"
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+module "image_builder_sg" {
+  source = "./modules/security-groups"
+  name   = "image-builder-sg"
+  vpc_id = module.image_builder_vpc.vpc_id
+  ingress_rules = []
+  egress_rules = [
+    {
+      description = "Allow all outbound traffic"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  ]
   tags = {
-    Name = "Image Builder Security Group"
+    Name = "image-builder-sg"
   }
 }
 
@@ -86,7 +110,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   description                   = "Infrastructure config for Golden AMI builds"
   instance_profile_name         = aws_iam_instance_profile.image_builder.name
   instance_types                = ["m5.large", "m5.xlarge"]
-  security_group_ids            = [aws_security_group.image_builder.id]
+  security_group_ids            = [module.image_builder_sg.id]  
   subnet_id                     = var.subnet_id
   terminate_instance_on_failure = true
   key_pair                      = var.key_pair_name
@@ -172,10 +196,8 @@ EOF
 # --------------------------------------------------------------------------------
 resource "aws_imagebuilder_distribution_configuration" "multi_region" {
   name = "multi-region-distribution"
-
   distribution {
     region = var.primary_region
-
     ami_distribution_configuration {
       name = "golden-ami-{{ imagebuilder:buildDate }}"
       ami_tags = {
@@ -184,10 +206,8 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       }
     }
   }
-
   distribution {
     region = "eu-west-1"
-
     ami_distribution_configuration {
       name = "golden-ami-{{ imagebuilder:buildDate }}"
       ami_tags = {
@@ -196,10 +216,8 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       }
     }
   }
-
   distribution {
     region = "ap-southeast-1"
-
     ami_distribution_configuration {
       name = "golden-ami-{{ imagebuilder:buildDate }}"
       ami_tags = {
