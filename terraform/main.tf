@@ -1,4 +1,3 @@
-
 # --------------------------------------------------------------------------------
 # Getting project information
 # --------------------------------------------------------------------------------
@@ -164,12 +163,10 @@ resource "aws_imagebuilder_component" "security_hardening" {
   name     = "security-hardening"
   platform = "Linux"
   version  = "1.0.0"
-
   data = <<EOF
 name: SecurityHardening
 description: Custom security hardening steps
 schemaVersion: 1.0
-
 phases:
   - name: build
     steps:
