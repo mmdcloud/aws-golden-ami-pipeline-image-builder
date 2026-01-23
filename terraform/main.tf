@@ -21,7 +21,7 @@ module "image_builder_vpc" {
   single_nat_gateway      = false
   one_nat_gateway_per_az  = true
   tags = {
-    Name     = "image-builder-vpc"
+    Name = "image-builder-vpc"
   }
 }
 
@@ -63,9 +63,9 @@ resource "aws_iam_instance_profile" "image_builder" {
 # Security Groups for Image Builder instances
 # --------------------------------------------------------------------------------
 module "image_builder_sg" {
-  source = "./modules/security-groups"
-  name   = "image-builder-sg"
-  vpc_id = module.image_builder_vpc.vpc_id
+  source        = "./modules/security-groups"
+  name          = "image-builder-sg"
+  vpc_id        = module.image_builder_vpc.vpc_id
   ingress_rules = []
   egress_rules = [
     {
@@ -109,7 +109,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   description                   = "Infrastructure config for Golden AMI builds"
   instance_profile_name         = aws_iam_instance_profile.image_builder.name
   instance_types                = ["m5.large", "m5.xlarge"]
-  security_group_ids            = [module.image_builder_sg.id]  
+  security_group_ids            = [module.image_builder_sg.id]
   subnet_id                     = var.subnet_id
   terminate_instance_on_failure = true
   key_pair                      = var.key_pair_name
@@ -163,7 +163,7 @@ resource "aws_imagebuilder_component" "security_hardening" {
   name     = "security-hardening"
   platform = "Linux"
   version  = "1.0.0"
-  data = <<EOF
+  data     = <<EOF
 name: SecurityHardening
 description: Custom security hardening steps
 schemaVersion: 1.0
