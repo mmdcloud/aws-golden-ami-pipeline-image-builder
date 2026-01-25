@@ -1,4 +1,4 @@
-# AWS EC2 Image Builder - Golden AMI Pipeline
+# 🚀 AWS EC2 Image Builder - Golden AMI Pipeline
 
 [![Terraform](https://img.shields.io/badge/Terraform-1.0%2B-623CE4?logo=terraform)](https://www.terraform.io/)
 [![AWS](https://img.shields.io/badge/AWS-Image%20Builder-FF9900?logo=amazon-aws)](https://aws.amazon.com/image-builder/)
