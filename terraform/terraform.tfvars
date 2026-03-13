@@ -5,3 +5,4 @@ azs                         = ["us-east-1a", "us-east-1b", "us-east-1c"]
 key_pair_name               = "madmaxkeypair"
 notification_email          = "madmaxcloudonline@gmail.com"
 subnet_id = "us-east-1a"
+project = "image-builder"

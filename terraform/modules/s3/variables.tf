@@ -60,3 +60,7 @@ variable "restrict_public_buckets" {
 #   }))
 #   default = []
 # }
+variable "tags" {
+  type = map(string)
+  default ={}
+}

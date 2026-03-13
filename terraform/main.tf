@@ -21,7 +21,9 @@ module "image_builder_vpc" {
   single_nat_gateway      = false
   one_nat_gateway_per_az  = true
   tags = {
-    Name = "image-builder-vpc"
+    Name      = "image-builder-vpc"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -29,7 +31,7 @@ module "image_builder_vpc" {
 # IAM Role for EC2 Image Builder
 # --------------------------------------------------------------------------------
 resource "aws_iam_role" "image_builder" {
-  name = "EC2ImageBuilderRole"
+  name = "ec2-image-builder-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -42,6 +44,11 @@ resource "aws_iam_role" "image_builder" {
       }
     ]
   })
+  tags = {
+    Name      = "ec2-image-builder-role"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "image_builder" {
@@ -77,7 +84,9 @@ module "image_builder_sg" {
     }
   ]
   tags = {
-    Name = "image-builder-sg"
+    Name      = "image-builder-sg"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -99,6 +108,11 @@ module "ami_artifacts" {
   ]
   versioning_enabled = "Enabled"
   force_destroy      = true
+  tags = {
+    Name      = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -118,6 +132,11 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
       s3_bucket_name = module.ami_artifacts.id
       s3_key_prefix  = "logs"
     }
+  }
+  tags = {
+    Name      = "golden-ami-config"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -154,6 +173,11 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   lifecycle {
     create_before_destroy = true
   }
+  tags = {
+    Name      = "base-linux-recipe"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -186,6 +210,11 @@ phases:
             - rkhunter --update
             - rkhunter --propupd
 EOF
+  tags = {
+    Name      = "security-hardening"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -223,6 +252,11 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       }
     }
   }
+  tags = {
+    Name      = "multi-region-distribution"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -244,6 +278,11 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
     image_tests_enabled = true
     timeout_minutes     = 60
   }
+  tags = {
+    Name      = "golden-ami-pipeline"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -263,6 +302,11 @@ module "eventbridge_rule" {
   })
   target_id  = "SendToSNS"
   target_arn = module.ami_events_sns.topic_arn
+  tags = {
+    Name      = "golden-ami-pipeline"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -277,4 +321,9 @@ module "ami_events_sns" {
       endpoint = var.notification_email
     }
   ]
+  tags = {
+    Name      = "golden-ami-pipeline"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
