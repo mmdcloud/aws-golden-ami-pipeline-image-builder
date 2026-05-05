@@ -605,3 +605,269 @@ module "ami_events_sns" {
     Project   = var.project
   }
 }
+
+# ---------------------------------------------------------------------------------
+# Detect non-compliant / unencrypted AMIs across the account
+# ---------------------------------------------------------------------------------
+resource "aws_config_configuration_recorder" "main" {
+  name     = "ami-factory-recorder"
+  role_arn = aws_iam_role.config_role.arn
+
+  recording_group {
+    all_supported                 = false
+    include_global_resource_types = false
+    resource_types = [
+      "AWS::EC2::Instance",
+      "AWS::EC2::Volume",
+      "AWS::ImageBuilder::ImagePipeline",
+      "AWS::IAM::Role",
+      "AWS::S3::Bucket",
+    ]
+  }
+}
+
+resource "aws_config_delivery_channel" "main" {
+  name           = "ami-factory-delivery"
+  s3_bucket_name = aws_s3_bucket.config_logs.id
+  depends_on     = [aws_config_configuration_recorder.main]
+}
+
+resource "aws_config_configuration_recorder_status" "main" {
+  name       = aws_config_configuration_recorder.main.name
+  is_enabled = true
+  depends_on = [aws_config_delivery_channel.main]
+}
+
+resource "aws_config_config_rule" "encrypted_volumes" {
+  name = "ami-factory-encrypted-volumes"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "ENCRYPTED_VOLUMES"
+  }
+
+  depends_on = [aws_config_configuration_recorder_status.main]
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_config_config_rule" "approved_amis_by_tag" {
+  name = "ami-factory-approved-amis"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "APPROVED_AMIS_BY_TAG"
+  }
+
+  input_parameters = jsonencode({
+    amisByTagKeyAndValue = "Project:${var.project}"
+  })
+
+  depends_on = [aws_config_configuration_recorder_status.main]
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_s3_bucket" "config_logs" {
+  bucket        = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+  force_destroy = false
+
+  tags = {
+    Name    = "aws-config-ami-factory-logs"
+    Project = var.project
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "config_logs" {
+  bucket                  = aws_s3_bucket.config_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "config_logs" {
+  bucket = aws_s3_bucket.config_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSConfigBucketPermissionsCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.config_logs.arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid    = "AWSConfigBucketDelivery"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"    = "bucket-owner-full-control"
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "config_role" {
+  name = "ami-factory-config-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "config.amazonaws.com" }
+    }]
+  })
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "config_role_policy" {
+  role       = aws_iam_role.config_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
+}
+
+# ---------------------------------------------------------------------------------
+# CLOUDTRAIL — Full API audit trail for all Image Builder + KMS + S3 activity
+# ---------------------------------------------------------------------------------
+resource "aws_cloudtrail" "ami_factory" {
+  name                          = "ami-factory-trail"
+  s3_bucket_name                = aws_s3_bucket.cloudtrail_logs.id
+  include_global_service_events = true
+  is_multi_region_trail         = true
+  enable_log_file_validation    = true
+  kms_key_id                    = aws_kms_key.ami_encryption.arn
+
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = true
+
+    # Track all S3 data events on the artifacts bucket
+    data_resource {
+      type   = "AWS::S3::Object"
+      values = ["${module.ami_artifacts.arn}/"]
+    }
+  }
+
+  cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
+  cloud_watch_logs_role_arn  = aws_iam_role.cloudtrail_cw_role.arn
+
+  tags = {
+    Name    = "ami-factory-trail"
+    Project = var.project
+  }
+
+  depends_on = [aws_s3_bucket_policy.cloudtrail_logs]
+}
+
+resource "aws_cloudwatch_log_group" "cloudtrail" {
+  name              = "/aws/cloudtrail/ami-factory"
+  retention_in_days = 90
+  kms_key_id        = aws_kms_key.ami_encryption.arn
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_s3_bucket" "cloudtrail_logs" {
+  bucket        = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+  force_destroy = false
+
+  tags = {
+    Name    = "cloudtrail-ami-factory-logs"
+    Project = var.project
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "cloudtrail_logs" {
+  bucket                  = aws_s3_bucket.cloudtrail_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSCloudTrailAclCheck"
+        Effect = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.cloudtrail_logs.arn
+        Condition = {
+          StringEquals = { "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail" }
+        }
+      },
+      {
+        Sid    = "AWSCloudTrailWrite"
+        Effect = "Allow"
+        Principal = { Service = "cloudtrail.amazonaws.com" }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"  = "bucket-owner-full-control"
+            "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "cloudtrail_cw_role" {
+  name = "ami-factory-cloudtrail-cw-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "cloudtrail.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "cloudtrail_cw_policy" {
+  name = "cloudtrail-cw-logs-policy"
+  role = aws_iam_role.cloudtrail_cw_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
+      Resource = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
+    }]
+  })
+}

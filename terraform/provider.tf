@@ -6,6 +6,13 @@ terraform {
       version = ">= 6.0"
     }
   }
+  backend "s3" {
+    bucket         = "tfstate-ami-factory-<account-id>"
+    key            = "ami-factory/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "tfstate-ami-factory-lock"
+  }
 }
 
 provider "aws" {
