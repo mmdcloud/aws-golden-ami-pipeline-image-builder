@@ -871,3 +871,175 @@ resource "aws_iam_role_policy" "cloudtrail_cw_policy" {
     }]
   })
 }
+
+# ---------------------------------------------------------------------------------
+# INSPECTOR V2 — Continuous vulnerability scanning on build instances
+# ---------------------------------------------------------------------------------
+resource "aws_inspector2_enabler" "ami_factory" {
+  account_ids    = [data.aws_caller_identity.current.account_id]
+  resource_types = ["EC2", "ECR"]
+}
+
+# SNS alert when Inspector finds a CRITICAL finding
+resource "aws_cloudwatch_event_rule" "inspector_critical" {
+  name        = "ami-factory-inspector-critical"
+  description = "Alert on Inspector CRITICAL findings during AMI builds"
+
+  event_pattern = jsonencode({
+    source      = ["aws.inspector2"]
+    detail-type = ["Inspector2 Finding"]
+    detail = {
+      severity = ["CRITICAL", "HIGH"]
+      status   = ["ACTIVE"]
+      resources = {
+        type = ["AWS_EC2_INSTANCE"]
+      }
+    }
+  })
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_cloudwatch_event_target" "inspector_critical_sns" {
+  rule      = aws_cloudwatch_event_rule.inspector_critical.name
+  target_id = "InspectorCriticalToSNS"
+  arn       = module.ami_events_sns.topic_arn
+}
+
+# ---------------------------------------------------------------------------------
+# CLOUDWATCH ALARMS — Pipeline health monitoring
+# ---------------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "image_builder" {
+  name              = "/aws/imagebuilder/ami-factory"
+  retention_in_days = 90
+  kms_key_id        = aws_kms_key.ami_encryption.arn
+
+  tags = {
+    Project = var.project
+  }
+}
+
+# Metric filter: count pipeline FAILED events from EventBridge logs
+resource "aws_cloudwatch_log_metric_filter" "pipeline_failures" {
+  name           = "ami-pipeline-failures"
+  log_group_name = aws_cloudwatch_log_group.image_builder.name
+  pattern        = "{ $.detail.state.status = \"FAILED\" }"
+
+  metric_transformation {
+    name      = "PipelineFailures"
+    namespace = "AMIFactory/ImageBuilder"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "pipeline_failures" {
+  alarm_name          = "ami-factory-pipeline-failures"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PipelineFailures"
+  namespace           = "AMIFactory/ImageBuilder"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Image Builder pipeline failed. Check /aws/imagebuilder/ami-factory logs. Common causes: component script error, Inspector test failure, or KMS key access denied during EBS encryption."
+  alarm_actions       = [module.ami_events_sns.topic_arn]
+  ok_actions          = [module.ami_events_sns.topic_arn]
+
+  tags = {
+    Project = var.project
+  }
+}
+
+# KMS key usage anomaly — unexpected spikes = possible unauthorized decryption
+resource "aws_cloudwatch_metric_alarm" "kms_key_usage_spike" {
+  alarm_name          = "ami-factory-kms-usage-spike"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "NumberOfRequestsSucceeded"
+  namespace           = "AWS/KMS"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 500
+  alarm_description   = "Unusual KMS Decrypt/GenerateDataKey volume on ami-encryption-key. May indicate unauthorized AMI access or unexpected launch activity in non-production accounts."
+  alarm_actions       = [module.ami_events_sns.topic_arn]
+  ok_actions          = [module.ami_events_sns.topic_arn]
+
+  dimensions = {
+    KeyId = aws_kms_key.ami_encryption.key_id
+  }
+
+  tags = {
+    Project = var.project
+  }
+}
+
+# S3 artifacts bucket — 4XX errors = broken component download during builds
+resource "aws_cloudwatch_metric_alarm" "artifacts_4xx" {
+  alarm_name          = "ami-factory-artifacts-4xx"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "4xxErrors"
+  namespace           = "AWS/S3"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 5
+  alarm_description   = "S3 4XX errors on ami-artifacts bucket. Image Builder component downloads may be failing. Check bucket policy and IAM role permissions on ec2-image-builder-role."
+  alarm_actions       = [module.ami_events_sns.topic_arn]
+  ok_actions          = [module.ami_events_sns.topic_arn]
+
+  dimensions = {
+    BucketName  = module.ami_artifacts.id
+    FilterId    = "EntireBucket"
+  }
+
+  tags = {
+    Project = var.project
+  }
+}
+
+# ---------------------------------------------------------------------------------
+# SECURITY HUB — Aggregate Config, Inspector, CloudTrail findings in one place
+# ---------------------------------------------------------------------------------
+resource "aws_securityhub_account" "main" {}
+
+resource "aws_securityhub_standards_subscription" "cis" {
+  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0"
+  depends_on    = [aws_securityhub_account.main]
+}
+
+resource "aws_securityhub_standards_subscription" "aws_foundational" {
+  standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/aws-foundational-security-best-practices/v/1.0.0"
+  depends_on    = [aws_securityhub_account.main]
+}
+
+# Route CRITICAL Security Hub findings to SNS
+resource "aws_cloudwatch_event_rule" "securityhub_critical" {
+  name        = "ami-factory-securityhub-critical"
+  description = "Route CRITICAL Security Hub findings to SNS"
+
+  event_pattern = jsonencode({
+    source      = ["aws.securityhub"]
+    detail-type = ["Security Hub Findings - Imported"]
+    detail = {
+      findings = {
+        Severity = {
+          Label = ["CRITICAL", "HIGH"]
+        }
+        RecordState = ["ACTIVE"]
+        WorkflowState = ["NEW"]
+      }
+    }
+  })
+
+  tags = {
+    Project = var.project
+  }
+}
+
+resource "aws_cloudwatch_event_target" "securityhub_critical_sns" {
+  rule      = aws_cloudwatch_event_rule.securityhub_critical.name
+  target_id = "SecurityHubCriticalToSNS"
+  arn       = module.ami_events_sns.topic_arn
+}
