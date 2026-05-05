@@ -5,7 +5,7 @@ variable "primary_region" {
 }
 
 variable "notification_email" {
-  type    = string
+  type = string
 }
 
 variable "public_subnets" {
