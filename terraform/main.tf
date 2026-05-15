@@ -178,7 +178,6 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   security_group_ids            = [module.image_builder_sg.id]
   subnet_id                     = module.image_builder_vpc.private_subnets[0]
   terminate_instance_on_failure = true
-  # key_pair                      = var.key_pair_name
   logging {
     s3_logs {
       s3_bucket_name = module.ami_artifacts.id
@@ -558,6 +557,25 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
 }
 
 # --------------------------------------------------------------------------------
+# SNS Topic
+# --------------------------------------------------------------------------------
+module "ami_events_sns" {
+  source     = "./modules/sns"
+  topic_name = "ami-creation-notifications"
+  subscriptions = [
+    {
+      protocol = "email"
+      endpoint = var.notification_email
+    }
+  ]
+  tags = {
+    Name      = "golden-ami-pipeline"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
+}
+
+# --------------------------------------------------------------------------------
 # EventBridge Rule for AMI Creation Notifications
 # --------------------------------------------------------------------------------
 module "ami_events_rule" {
@@ -577,25 +595,6 @@ module "ami_events_rule" {
   target_arn = module.ami_events_sns.topic_arn
   tags = {
     Name      = "ami-creation-event"
-    ManagedBy = "terraform"
-    Project   = var.project
-  }
-}
-
-# --------------------------------------------------------------------------------
-# SNS Topic
-# --------------------------------------------------------------------------------
-module "ami_events_sns" {
-  source     = "./modules/sns"
-  topic_name = "ami-creation-notifications"
-  subscriptions = [
-    {
-      protocol = "email"
-      endpoint = var.notification_email
-    }
-  ]
-  tags = {
-    Name      = "golden-ami-pipeline"
     ManagedBy = "terraform"
     Project   = var.project
   }
@@ -623,7 +622,7 @@ resource "aws_config_configuration_recorder" "main" {
 
 resource "aws_config_delivery_channel" "main" {
   name           = "ami-factory-delivery"
-  s3_bucket_name = aws_s3_bucket.config_logs.id
+  s3_bucket_name = module.config_logs.id
   depends_on     = [aws_config_configuration_recorder.main]
 }
 
@@ -667,28 +666,11 @@ resource "aws_config_config_rule" "approved_amis_by_tag" {
   }
 }
 
-resource "aws_s3_bucket" "config_logs" {
-  bucket        = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
-  force_destroy = false
-
-  tags = {
-    Name    = "aws-config-ami-factory-logs"
-    Project = var.project
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "config_logs" {
-  bucket                  = aws_s3_bucket.config_logs.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_policy" "config_logs" {
-  bucket = aws_s3_bucket.config_logs.id
-
-  policy = jsonencode({
+module "config_logs" {
+  source      = "./modules/s3"
+  bucket_name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+  objects = []
+  bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -698,7 +680,7 @@ resource "aws_s3_bucket_policy" "config_logs" {
           Service = "config.amazonaws.com"
         }
         Action   = "s3:GetBucketAcl"
-        Resource = aws_s3_bucket.config_logs.arn
+        Resource = module.config_logs.arn
         Condition = {
           StringEquals = {
             "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
@@ -712,7 +694,7 @@ resource "aws_s3_bucket_policy" "config_logs" {
           Service = "config.amazonaws.com"
         }
         Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
+        Resource = "${module.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
         Condition = {
           StringEquals = {
             "s3:x-amz-acl"      = "bucket-owner-full-control"
@@ -722,6 +704,19 @@ resource "aws_s3_bucket_policy" "config_logs" {
       }
     ]
   })
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = false
+  tags = {
+    Name        = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+  }
 }
 
 resource "aws_iam_role" "config_role" {
@@ -751,7 +746,7 @@ resource "aws_iam_role_policy_attachment" "config_role_policy" {
 # ---------------------------------------------------------------------------------
 resource "aws_cloudtrail" "ami_factory" {
   name                          = "ami-factory-trail"
-  s3_bucket_name                = aws_s3_bucket.cloudtrail_logs.id
+  s3_bucket_name                = module.cloudtrail_logs.id
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_log_file_validation    = true
@@ -790,28 +785,11 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
   depends_on = [module.ami_encryption]
 }
 
-resource "aws_s3_bucket" "cloudtrail_logs" {
-  bucket        = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
-  force_destroy = false
-
-  tags = {
-    Name    = "cloudtrail-ami-factory-logs"
-    Project = var.project
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "cloudtrail_logs" {
-  bucket                  = aws_s3_bucket.cloudtrail_logs.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_policy" "cloudtrail_logs" {
-  bucket = aws_s3_bucket.cloudtrail_logs.id
-
-  policy = jsonencode({
+module "cloudtrail_logs" {
+  source      = "./modules/s3"
+  bucket_name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+  objects = []
+  bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -819,7 +797,7 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
         Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:GetBucketAcl"
-        Resource  = aws_s3_bucket.cloudtrail_logs.arn
+        Resource  = module.cloudtrail_logs.arn
         Condition = {
           StringEquals = { "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail" }
         }
@@ -829,7 +807,7 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
         Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:PutObject"
-        Resource  = "${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Resource  = "${module.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = {
             "s3:x-amz-acl"  = "bucket-owner-full-control"
@@ -839,6 +817,19 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
       }
     ]
   })
+  cors = [
+    {
+      allowed_headers = ["*"]
+      allowed_methods = ["GET"]
+      allowed_origins = ["*"]
+      max_age_seconds = 3000
+    }
+  ]
+  versioning_enabled = "Enabled"
+  force_destroy      = false
+  tags = {
+    Name        = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+  }
 }
 
 module "cloudtrail_cw_role" {
