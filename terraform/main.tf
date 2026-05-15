@@ -774,7 +774,7 @@ resource "aws_cloudtrail" "ami_factory" {
   }
 
   cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
-  cloud_watch_logs_role_arn  = aws_iam_role.cloudtrail_cw_role.arn
+  cloud_watch_logs_role_arn  = module.cloudtrail_cw_role.arn
 
   tags = {
     Name    = "ami-factory-trail"
@@ -846,31 +846,47 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
   })
 }
 
-resource "aws_iam_role" "cloudtrail_cw_role" {
-  name = "ami-factory-cloudtrail-cw-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = { Service = "cloudtrail.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy" "cloudtrail_cw_policy" {
-  name = "cloudtrail-cw-logs-policy"
-  role = aws_iam_role.cloudtrail_cw_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
-    }]
-  })
+module "cloudtrail_cw_role" {
+  source             = "./modules/iam"
+  role_name          = "ami-factory-cloudtrail-cw-role"
+  role_description   = "IAM role for VPC Flow Logs"
+  policy_name        = "cloudtrail-cw-logs-policy"
+  policy_description = "IAM policy for VPC Flow Logs"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "cloudtrail.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": [
+                  "logs:PutLogEvents",
+                  "logs:CreateLogStream"
+                ],
+                "Resource": [
+                  "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
+                ],
+                "Effect": "Allow"
+            }
+        ]
+    }
+    EOF
+  tags = {
+    Name        = "ami-factory-cloudtrail-cw-role"
+  }
 }
 
 # ---------------------------------------------------------------------------------
