@@ -82,7 +82,7 @@ resource "aws_iam_role_policy" "image_builder_kms" {
           "kms:DescribeKey",
           "kms:CreateGrant"
         ]
-        Resource = aws_kms_key.ami_encryption.arn
+        Resource = module.ami_encryption.arn
       },
       {
         Effect = "Allow"
@@ -195,20 +195,15 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
 # --------------------------------------------------------------------------------
 # Golden AMI Recipe
 # --------------------------------------------------------------------------------
-resource "aws_kms_key" "ami_encryption" {
+module "ami_encryption" {
+  source                  = "./modules/kms"
+  name                    = "ami-encryption-key"
   description             = "KMS key for AMI EBS encryption"
   deletion_window_in_days = 30
   enable_key_rotation     = true
   tags = {
     Name      = "ami-encryption-key"
-    ManagedBy = "terraform"
-    Project   = var.project
   }
-}
-
-resource "aws_kms_alias" "ami_encryption" {
-  name          = "alias/ami-encryption-key"
-  target_key_id = aws_kms_key.ami_encryption.key_id
 }
 
 resource "aws_imagebuilder_image_recipe" "base_linux" {
@@ -223,7 +218,7 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
       volume_size           = 30
       volume_type           = "gp3"
       encrypted             = true
-      kms_key_id            = aws_kms_key.ami_encryption.arn
+      kms_key_id            = module.ami_encryption.arn
     }
   }
 
@@ -438,7 +433,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = var.primary_region
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = aws_kms_key.ami_encryption.arn # ← add this
+      kms_key_id = module.ami_encryption.arn # ← add this
       ami_tags = {
         SourceAMI   = "{{ imagebuilder:sourceImage }}"
         BuildDate   = "{{ imagebuilder:buildDate }}"
@@ -458,7 +453,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "eu-west-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = aws_kms_key.ami_encryption.arn
+      kms_key_id = module.ami_encryption.arn
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
@@ -470,7 +465,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "ap-southeast-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = aws_kms_key.ami_encryption.arn
+      kms_key_id = module.ami_encryption.arn
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
@@ -720,7 +715,7 @@ resource "aws_s3_bucket_policy" "config_logs" {
         Resource = "${aws_s3_bucket.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
         Condition = {
           StringEquals = {
-            "s3:x-amz-acl"    = "bucket-owner-full-control"
+            "s3:x-amz-acl"      = "bucket-owner-full-control"
             "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
@@ -760,7 +755,7 @@ resource "aws_cloudtrail" "ami_factory" {
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_log_file_validation    = true
-  kms_key_id                    = aws_kms_key.ami_encryption.arn
+  kms_key_id                    = module.ami_encryption.arn
 
   event_selector {
     read_write_type           = "All"
@@ -787,12 +782,12 @@ resource "aws_cloudtrail" "ami_factory" {
 resource "aws_cloudwatch_log_group" "cloudtrail" {
   name              = "/aws/cloudtrail/ami-factory"
   retention_in_days = 90
-  kms_key_id        = aws_kms_key.ami_encryption.arn
+  kms_key_id        = module.ami_encryption.arn
 
   tags = {
     Project = var.project
   }
-  depends_on = [ aws_kms_key.ami_encryption ]
+  depends_on = [module.ami_encryption]
 }
 
 resource "aws_s3_bucket" "cloudtrail_logs" {
@@ -820,21 +815,21 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AWSCloudTrailAclCheck"
-        Effect = "Allow"
+        Sid       = "AWSCloudTrailAclCheck"
+        Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
-        Action   = "s3:GetBucketAcl"
-        Resource = aws_s3_bucket.cloudtrail_logs.arn
+        Action    = "s3:GetBucketAcl"
+        Resource  = aws_s3_bucket.cloudtrail_logs.arn
         Condition = {
           StringEquals = { "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail" }
         }
       },
       {
-        Sid    = "AWSCloudTrailWrite"
-        Effect = "Allow"
+        Sid       = "AWSCloudTrailWrite"
+        Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = {
             "s3:x-amz-acl"  = "bucket-owner-full-control"
@@ -885,7 +880,7 @@ module "cloudtrail_cw_role" {
     }
     EOF
   tags = {
-    Name        = "ami-factory-cloudtrail-cw-role"
+    Name = "ami-factory-cloudtrail-cw-role"
   }
 }
 
@@ -928,12 +923,12 @@ module "ami_factory_inspector_events_rule" {
 resource "aws_cloudwatch_log_group" "image_builder" {
   name              = "/aws/imagebuilder/ami-factory"
   retention_in_days = 90
-  kms_key_id        = aws_kms_key.ami_encryption.arn
+  kms_key_id        = module.ami_encryption.arn
 
   tags = {
     Project = var.project
   }
-  depends_on = [ aws_kms_key.ami_encryption ]
+  depends_on = [module.ami_encryption]
 }
 
 # Metric filter: count pipeline FAILED events from EventBridge logs
@@ -982,7 +977,7 @@ resource "aws_cloudwatch_metric_alarm" "kms_key_usage_spike" {
   ok_actions          = [module.ami_events_sns.topic_arn]
 
   dimensions = {
-    KeyId = aws_kms_key.ami_encryption.key_id
+    KeyId = module.ami_encryption.key_id
   }
 
   tags = {
@@ -1005,8 +1000,8 @@ resource "aws_cloudwatch_metric_alarm" "artifacts_4xx" {
   ok_actions          = [module.ami_events_sns.topic_arn]
 
   dimensions = {
-    BucketName  = module.ami_artifacts.id
-    FilterId    = "EntireBucket"
+    BucketName = module.ami_artifacts.id
+    FilterId   = "EntireBucket"
   }
 
   tags = {
@@ -1042,7 +1037,7 @@ module "securityhub_critical" {
         Severity = {
           Label = ["CRITICAL", "HIGH"]
         }
-        RecordState = ["ACTIVE"]
+        RecordState   = ["ACTIVE"]
         WorkflowState = ["NEW"]
       }
     }
