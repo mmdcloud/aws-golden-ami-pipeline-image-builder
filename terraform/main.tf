@@ -17,8 +17,8 @@ module "image_builder_vpc" {
   enable_dns_support      = true
   create_igw              = true
   map_public_ip_on_launch = true
-  enable_nat_gateway      = false
-  single_nat_gateway      = false
+  enable_nat_gateway      = true
+  single_nat_gateway      = true
   one_nat_gateway_per_az  = false
   tags = {
     Name      = "image-builder-vpc"
@@ -565,7 +565,7 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
 # --------------------------------------------------------------------------------
 # EventBridge Rule for AMI Creation Notifications
 # --------------------------------------------------------------------------------
-module "eventbridge_rule" {
+module "ami_events_rule" {
   source      = "./modules/eventbridge"
   rule_name   = "ami-creation-event"
   description = "Capture AMI creation events"
@@ -792,6 +792,7 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
   tags = {
     Project = var.project
   }
+  depends_on = [ aws_kms_key.ami_encryption ]
 }
 
 resource "aws_s3_bucket" "cloudtrail_logs" {
@@ -881,10 +882,10 @@ resource "aws_inspector2_enabler" "ami_factory" {
 }
 
 # SNS alert when Inspector finds a CRITICAL finding
-resource "aws_cloudwatch_event_rule" "inspector_critical" {
-  name        = "ami-factory-inspector-critical"
+module "ami_factory_inspector_events_rule" {
+  source      = "./modules/eventbridge"
+  rule_name   = "ami-factory-inspector-critical"
   description = "Alert on Inspector CRITICAL findings during AMI builds"
-
   event_pattern = jsonencode({
     source      = ["aws.inspector2"]
     detail-type = ["Inspector2 Finding"]
@@ -896,16 +897,13 @@ resource "aws_cloudwatch_event_rule" "inspector_critical" {
       }
     }
   })
-
+  target_id  = "InspectorCriticalToSNS"
+  target_arn = module.ami_events_sns.topic_arn
   tags = {
-    Project = var.project
+    Name      = "ami-factory-inspector-critical"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
-}
-
-resource "aws_cloudwatch_event_target" "inspector_critical_sns" {
-  rule      = aws_cloudwatch_event_rule.inspector_critical.name
-  target_id = "InspectorCriticalToSNS"
-  arn       = module.ami_events_sns.topic_arn
 }
 
 # ---------------------------------------------------------------------------------
@@ -919,6 +917,7 @@ resource "aws_cloudwatch_log_group" "image_builder" {
   tags = {
     Project = var.project
   }
+  depends_on = [ aws_kms_key.ami_encryption ]
 }
 
 # Metric filter: count pipeline FAILED events from EventBridge logs
@@ -1015,13 +1014,13 @@ resource "aws_securityhub_standards_subscription" "aws_foundational" {
 }
 
 # Route CRITICAL Security Hub findings to SNS
-resource "aws_cloudwatch_event_rule" "securityhub_critical" {
-  name        = "ami-factory-securityhub-critical"
-  description = "Route CRITICAL Security Hub findings to SNS"
-
+module "securityhub_critical" {
+  source      = "./modules/eventbridge"
+  rule_name   = "securityhub-critical-event"
+  description = "Capture Security Hub events"
   event_pattern = jsonencode({
     source      = ["aws.securityhub"]
-    detail-type = ["Security Hub Findings - Imported"]
+    detail-type = ["Image Builder Image State Change"]
     detail = {
       findings = {
         Severity = {
@@ -1032,14 +1031,11 @@ resource "aws_cloudwatch_event_rule" "securityhub_critical" {
       }
     }
   })
-
+  target_id  = "SecurityHubCriticalToSNS"
+  target_arn = module.ami_events_sns.topic_arn
   tags = {
-    Project = var.project
+    Name      = "securityhub-critical-event"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
-}
-
-resource "aws_cloudwatch_event_target" "securityhub_critical_sns" {
-  rule      = aws_cloudwatch_event_rule.securityhub_critical.name
-  target_id = "SecurityHubCriticalToSNS"
-  arn       = module.ami_events_sns.topic_arn
 }
