@@ -39,7 +39,7 @@ resource "aws_iam_role" "image_builder" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "ec2.amazonaws.com"
+          Service = "imagebuilder.amazonaws.com"
         }
       }
     ]
@@ -771,7 +771,7 @@ resource "aws_cloudtrail" "ami_factory" {
     Project = var.project
   }
 
-  depends_on = [aws_s3_bucket_policy.cloudtrail_logs]
+  depends_on = [module.cloudtrail_logs]
 }
 
 resource "aws_cloudwatch_log_group" "cloudtrail" {
@@ -1022,7 +1022,7 @@ module "securityhub_critical" {
   description = "Capture Security Hub events"
   event_pattern = jsonencode({
     source      = ["aws.securityhub"]
-    detail-type = ["Image Builder Image State Change"]
+    detail-type = ["Security Hub Findings - Imported"]
     detail = {
       findings = {
         Severity = {
