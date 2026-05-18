@@ -39,7 +39,7 @@ resource "aws_iam_role" "image_builder" {
         Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          Service = "imagebuilder.amazonaws.com"
+          Service = "ec2.amazonaws.com"
         }
       }
     ]
@@ -880,7 +880,7 @@ module "cloudtrail_cw_role" {
 # ---------------------------------------------------------------------------------
 resource "aws_inspector2_enabler" "ami_factory" {
   account_ids    = [data.aws_caller_identity.current.account_id]
-  resource_types = ["EC2", "ECR"]
+  resource_types = ["EC2"]
 }
 
 # SNS alert when Inspector finds a CRITICAL finding
@@ -935,7 +935,8 @@ resource "aws_cloudwatch_log_metric_filter" "pipeline_failures" {
   }
 }
 
-resource "aws_cloudwatch_metric_alarm" "pipeline_failures" {
+module "pipeline_failures" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-pipeline-failures"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
@@ -946,15 +947,12 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_failures" {
   threshold           = 0
   alarm_description   = "Image Builder pipeline failed. Check /aws/imagebuilder/ami-factory logs. Common causes: component script error, Inspector test failure, or KMS key access denied during EBS encryption."
   alarm_actions       = [module.ami_events_sns.topic_arn]
-  ok_actions          = [module.ami_events_sns.topic_arn]
-
-  tags = {
-    Project = var.project
-  }
+  ok_actions          = [module.ami_events_sns.topic_arn]  
 }
 
 # KMS key usage anomaly — unexpected spikes = possible unauthorized decryption
-resource "aws_cloudwatch_metric_alarm" "kms_key_usage_spike" {
+module "kms_key_usage_spike" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-kms-usage-spike"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
@@ -970,14 +968,11 @@ resource "aws_cloudwatch_metric_alarm" "kms_key_usage_spike" {
   dimensions = {
     KeyId = module.ami_encryption.key_id
   }
-
-  tags = {
-    Project = var.project
-  }
 }
 
 # S3 artifacts bucket — 4XX errors = broken component download during builds
-resource "aws_cloudwatch_metric_alarm" "artifacts_4xx" {
+module "carshub_frontend_ecs_task_restarts" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-artifacts-4xx"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 1
@@ -993,10 +988,6 @@ resource "aws_cloudwatch_metric_alarm" "artifacts_4xx" {
   dimensions = {
     BucketName = module.ami_artifacts.id
     FilterId   = "EntireBucket"
-  }
-
-  tags = {
-    Project = var.project
   }
 }
 

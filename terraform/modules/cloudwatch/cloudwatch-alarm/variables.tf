@@ -1,4 +1,7 @@
-variable "dimensions" {}
+variable "dimensions" {
+    type = map(string)
+    default = {}
+}
 variable "alarm_name"{}
 variable "comparison_operator"{}
 variable "evaluation_periods"{}
