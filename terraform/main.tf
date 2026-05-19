@@ -150,14 +150,7 @@ module "ami_artifacts" {
       }
     ]
   })
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
+  cors               = []
   versioning_enabled = "Enabled"
   force_destroy      = false
   tags = {
@@ -201,7 +194,7 @@ module "ami_encryption" {
   deletion_window_in_days = 30
   enable_key_rotation     = true
   tags = {
-    Name      = "ami-encryption-key"
+    Name = "ami-encryption-key"
   }
 }
 
@@ -669,7 +662,7 @@ resource "aws_config_config_rule" "approved_amis_by_tag" {
 module "config_logs" {
   source      = "./modules/s3"
   bucket_name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
-  objects = []
+  objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -717,11 +710,11 @@ module "config_logs" {
       }
     ]
   })
-  cors = []
+  cors               = []
   versioning_enabled = "Disabled"
   force_destroy      = false
   tags = {
-    Name        = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+    Name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
   }
 }
 
@@ -833,7 +826,7 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
 module "cloudtrail_logs" {
   source      = "./modules/s3"
   bucket_name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
-  objects = []
+  objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -859,23 +852,36 @@ module "cloudtrail_logs" {
             "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail"
           }
         }
+      },
+      {
+        Sid       = "DenyNonSSL"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          module.cloudtrail_logs.arn,
+          "${module.cloudtrail_logs.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
       }
     ]
   })
-  cors = []
+  cors               = []
   versioning_enabled = "Disabled"
   force_destroy      = false
   tags = {
-    Name        = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+    Name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
   }
 }
 
 module "cloudtrail_cw_role" {
   source             = "./modules/iam"
   role_name          = "ami-factory-cloudtrail-cw-role"
-  role_description   = "IAM role for VPC Flow Logs"
+  role_description   = "IAM role for Cloudtrail logs"
   policy_name        = "cloudtrail-cw-logs-policy"
-  policy_description = "IAM policy for VPC Flow Logs"
+  policy_description = "IAM policy for Cloudtrail logs"
   assume_role_policy = <<EOF
     {
         "Version": "2012-10-17",
@@ -985,7 +991,7 @@ module "pipeline_failures" {
   threshold           = 0
   alarm_description   = "Image Builder pipeline failed. Check /aws/imagebuilder/ami-factory logs. Common causes: component script error, Inspector test failure, or KMS key access denied during EBS encryption."
   alarm_actions       = [module.ami_events_sns.topic_arn]
-  ok_actions          = [module.ami_events_sns.topic_arn]  
+  ok_actions          = [module.ami_events_sns.topic_arn]
 }
 
 # KMS key usage anomaly — unexpected spikes = possible unauthorized decryption
