@@ -7,8 +7,8 @@ terraform {
     }
   }
   backend "s3" {
-    bucket         = "tfstate-ami-factory-<account-id>"
-    key            = "ami-factory/terraform.tfstate"
+    bucket         = "tfstate-ami-factory"
+    key            = "terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
     dynamodb_table = "tfstate-ami-factory-lock"

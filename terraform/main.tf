@@ -154,7 +154,7 @@ module "ami_artifacts" {
     {
       allowed_headers = ["*"]
       allowed_methods = ["GET"]
-      allowed_origins = ["https://*.amazonaws.com"]
+      allowed_origins = ["*"]
       max_age_seconds = 3000
     }
   ]
@@ -508,7 +508,7 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
 resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
   name           = "golden-ami-lifecycle"
   description    = "Deprecate AMIs older than 90 days, delete after 180"
-  execution_role = aws_iam_role.image_builder.arn
+  execution_role = aws_iam_role.lifecycle_policy.arn
   resource_type  = "AMI_IMAGE"
   status         = "ENABLED"
 
@@ -701,18 +701,24 @@ module "config_logs" {
             "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
           }
         }
+      },
+      {
+        Sid       = "DenyNonSSL"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          module.config_logs.arn,
+          "${module.config_logs.arn}/*"
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
       }
     ]
   })
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  versioning_enabled = "Enabled"
+  cors = []
+  versioning_enabled = "Disabled"
   force_destroy      = false
   tags = {
     Name        = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
@@ -739,6 +745,45 @@ resource "aws_iam_role" "config_role" {
 resource "aws_iam_role_policy_attachment" "config_role_policy" {
   role       = aws_iam_role.config_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
+}
+
+resource "aws_iam_role" "lifecycle_policy" {
+  name = "ami-factory-lifecycle-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "imagebuilder.amazonaws.com" }
+    }]
+  })
+
+  tags = {
+    Name    = "ami-factory-lifecycle-role"
+    Project = var.project
+  }
+}
+
+resource "aws_iam_role_policy" "lifecycle_policy" {
+  name = "ami-factory-lifecycle-policy"
+  role = aws_iam_role.lifecycle_policy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DeregisterImage",
+          "ec2:DescribeImages",
+          "ec2:DeleteSnapshot",
+          "ec2:DescribeSnapshots"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 # ---------------------------------------------------------------------------------
@@ -817,15 +862,8 @@ module "cloudtrail_logs" {
       }
     ]
   })
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  versioning_enabled = "Enabled"
+  cors = []
+  versioning_enabled = "Disabled"
   force_destroy      = false
   tags = {
     Name        = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
@@ -971,7 +1009,7 @@ module "kms_key_usage_spike" {
 }
 
 # S3 artifacts bucket — 4XX errors = broken component download during builds
-module "carshub_frontend_ecs_task_restarts" {
+module "ami_artifacts_s3_4xx" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-artifacts-4xx"
   comparison_operator = "GreaterThanThreshold"

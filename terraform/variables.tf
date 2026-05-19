@@ -5,7 +5,8 @@ variable "primary_region" {
 }
 
 variable "notification_email" {
-  type = string
+  type        = string
+  description = "Email address to receive AMI pipeline and security notifications"
 }
 
 variable "public_subnets" {
