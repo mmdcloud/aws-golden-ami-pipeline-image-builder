@@ -26,13 +26,26 @@ provider "aws" {
   }
 }
 
-# Cross-region providers for multi-region AMI distribution
 provider "aws" {
   alias  = "eu_west"
   region = "eu-west-1"
+  default_tags {
+    tags = {
+      Environment = "Production"
+      Project     = "AMI Factory"
+      ManagedBy   = "Terraform"
+    }
+  }
 }
 
 provider "aws" {
   alias  = "ap_southeast"
   region = "ap-southeast-1"
+  default_tags {
+    tags = {
+      Environment = "Production"
+      Project     = "AMI Factory"
+      ManagedBy   = "Terraform"
+    }
+  }
 }

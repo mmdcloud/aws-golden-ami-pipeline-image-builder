@@ -82,7 +82,11 @@ resource "aws_iam_role_policy" "image_builder_kms" {
           "kms:DescribeKey",
           "kms:CreateGrant"
         ]
-        Resource = module.ami_encryption.arn
+        Resource = [
+          module.ami_encryption.arn,
+          aws_kms_replica_key.ami_encryption_eu_west.arn,
+          aws_kms_replica_key.ami_encryption_ap_southeast.arn,
+        ]
       },
       {
         Effect = "Allow"
@@ -198,9 +202,35 @@ module "ami_encryption" {
   }
 }
 
+resource "aws_kms_replica_key" "ami_encryption_eu_west" {
+  provider                = aws.eu_west
+  description             = "KMS replica key for AMI EBS encryption — eu-west-1"
+  primary_key_arn         = module.ami_encryption.arn
+  deletion_window_in_days = 30
+  enabled                 = true
+  tags = {
+    Name      = "ami-encryption-key-eu-west-1"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
+}
+
+resource "aws_kms_replica_key" "ami_encryption_ap_southeast" {
+  provider                = aws.ap_southeast
+  description             = "KMS replica key for AMI EBS encryption — ap-southeast-1"
+  primary_key_arn         = module.ami_encryption.arn
+  deletion_window_in_days = 30
+  enabled                 = true
+  tags = {
+    Name      = "ami-encryption-key-ap-southeast-1"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
+}
+
 resource "aws_imagebuilder_image_recipe" "base_linux" {
   name         = "base-linux-recipe"
-  parent_image = "arn:aws:imagebuilder:${var.primary_region}:aws:image/amazon-linux-2-x86/x.x.x"
+  parent_image = "arn:aws:imagebuilder:${var.primary_region}:aws:image/ubuntu-server-24-lts-x86/x.x.x"
   version      = "1.0.0"
 
   block_device_mapping {
@@ -249,153 +279,317 @@ resource "aws_imagebuilder_component" "security_hardening" {
   version  = "1.0.0"
   data     = <<EOF
 name: SecurityHardening
-description: CIS-aligned security hardening for golden AMI
+description: CIS Level 2 aligned security hardening for Ubuntu 24.04 LTS golden AMI
 schemaVersion: 1.0
 phases:
   - name: build
     steps:
-      # ── SSH hardening ──────────────────────────────────────────
+
+      # ── 0. Bootstrap: update package index ────────────────────
+      - name: UpdatePackages
+        action: ExecuteBash
+        inputs:
+          commands:
+            - export DEBIAN_FRONTEND=noninteractive
+            - apt-get update -y
+            - apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+
+      # ── 1. SSH hardening ───────────────────────────────────────
+      # Ubuntu 24.04 ships with sshd_config.d/ includes support.
+      # We drop a file there so the main sshd_config is untouched
+      # and AWS SSM can still connect (it uses the SSM agent, not SSH).
       - name: HardenSSH
         action: ExecuteBash
         inputs:
           commands:
-            - sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-            - sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-            - sed -i 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
-            - sed -i 's/^#*X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
-            - sed -i 's/^#*MaxAuthTries.*/MaxAuthTries 3/' /etc/ssh/sshd_config
-            - sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/' /etc/ssh/sshd_config
-            - sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/' /etc/ssh/sshd_config
-            - echo "Protocol 2" >> /etc/ssh/sshd_config
-            - echo "AllowTcpForwarding no" >> /etc/ssh/sshd_config
-            - echo "Ciphers aes256-ctr,aes192-ctr,aes128-ctr" >> /etc/ssh/sshd_config
-            - echo "MACs hmac-sha2-256,hmac-sha2-512" >> /etc/ssh/sshd_config
-            - systemctl restart sshd
+            - |
+              cat > /etc/ssh/sshd_config.d/99-hardening.conf << 'SSHD'
+              Protocol 2
+              PermitRootLogin no
+              PasswordAuthentication no
+              PermitEmptyPasswords no
+              X11Forwarding no
+              MaxAuthTries 3
+              ClientAliveInterval 300
+              ClientAliveCountMax 2
+              AllowTcpForwarding no
+              AllowAgentForwarding no
+              PermitUserEnvironment no
+              LoginGraceTime 60
+              MaxSessions 4
+              Ciphers aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+              MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256
+              KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group14-sha256
+              SSHD
+            - chmod 600 /etc/ssh/sshd_config.d/99-hardening.conf
+            # Ubuntu 24.04 uses 'ssh' not 'sshd' as the service name
+            - sshd -t && systemctl restart ssh
 
-      # ── Kernel hardening (sysctl) ──────────────────────────────
+      # ── 2. Kernel hardening (sysctl) ──────────────────────────
       - name: HardenKernel
         action: ExecuteBash
         inputs:
           commands:
             - |
               cat > /etc/sysctl.d/99-hardening.conf << 'SYSCTL'
-              # Prevent IP spoofing
+              # ── Network: IP spoofing and routing ──
               net.ipv4.conf.all.rp_filter = 1
               net.ipv4.conf.default.rp_filter = 1
-              # Disable IP source routing
               net.ipv4.conf.all.accept_source_route = 0
               net.ipv4.conf.default.accept_source_route = 0
-              # Disable ICMP redirects
+              net.ipv6.conf.all.accept_source_route = 0
+
+              # ── Network: ICMP redirects ──
               net.ipv4.conf.all.accept_redirects = 0
               net.ipv4.conf.default.accept_redirects = 0
               net.ipv4.conf.all.send_redirects = 0
-              # Enable SYN flood protection
+              net.ipv6.conf.all.accept_redirects = 0
+              net.ipv4.conf.all.secure_redirects = 0
+
+              # ── Network: SYN flood and misc ──
               net.ipv4.tcp_syncookies = 1
-              # Disable IPv6 if not needed
+              net.ipv4.icmp_echo_ignore_broadcasts = 1
+              net.ipv4.icmp_ignore_bogus_error_responses = 1
+              net.ipv4.tcp_rfc1337 = 1
+              net.ipv4.conf.all.log_martians = 1
+              net.ipv4.conf.default.log_martians = 1
+
+              # ── IPv6: disable if not required ──
               net.ipv6.conf.all.disable_ipv6 = 1
               net.ipv6.conf.default.disable_ipv6 = 1
-              # Restrict core dumps
-              fs.suid_dumpable = 0
-              # Hide kernel pointers
-              kernel.kptr_restrict = 2
-              # Restrict dmesg access
-              kernel.dmesg_restrict = 1
-              # Prevent ptrace abuse
-              kernel.yama.ptrace_scope = 1
-              SYSCTL
-            - sysctl -p /etc/sysctl.d/99-hardening.conf
 
-      # ── Password and account policies ─────────────────────────
+              # ── Kernel: restrict information exposure ──
+              kernel.kptr_restrict = 2
+              kernel.dmesg_restrict = 1
+              kernel.printk = 3 3 3 3
+              kernel.unprivileged_bpf_disabled = 1
+              net.core.bpf_jit_harden = 2
+
+              # ── Kernel: restrict process tracing ──
+              kernel.yama.ptrace_scope = 2
+
+              # ── Kernel: core dumps ──
+              fs.suid_dumpable = 0
+              kernel.core_uses_pid = 1
+
+              # ── Kernel: ASLR ──
+              kernel.randomize_va_space = 2
+
+              # ── Virtual memory hardening ──
+              vm.mmap_rnd_bits = 32
+              vm.mmap_rnd_compat_bits = 16
+              vm.swappiness = 10
+              SYSCTL
+            - sysctl --system
+
+      # ── 3. Password and account policies ──────────────────────
+      # Ubuntu 24.04 uses PAM with pam_pwquality (libpam-pwquality).
+      # authconfig does not exist on Debian/Ubuntu.
       - name: PasswordPolicy
         action: ExecuteBash
         inputs:
           commands:
-            - sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS 90/' /etc/login.defs
-            - sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS 7/' /etc/login.defs
-            - sed -i 's/^PASS_MIN_LEN.*/PASS_MIN_LEN 14/' /etc/login.defs
-            - sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE 14/' /etc/login.defs
-            - authconfig --passalgo=sha512 --update
+            - apt-get install -y libpam-pwquality
+            # login.defs aging settings
+            - sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   90/'  /etc/login.defs
+            - sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   7/'   /etc/login.defs
+            - sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   14/'  /etc/login.defs
+            # SHA-512 hashing (Ubuntu 24.04 default, but set explicitly)
+            - sed -i 's/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/' /etc/login.defs
+            # pam_pwquality: enforce complexity on common-password
+            - |
+              if grep -q 'pam_pwquality' /etc/pam.d/common-password; then
+                sed -i 's/.*pam_pwquality.so.*/password requisite pam_pwquality.so retry=3 minlen=14 dcredit=-1 ucredit=-1 ocredit=-1 lcredit=-1 maxrepeat=3 reject_username enforce_for_root/' /etc/pam.d/common-password
+              else
+                sed -i '/pam_unix.so/i password requisite pam_pwquality.so retry=3 minlen=14 dcredit=-1 ucredit=-1 ocredit=-1 lcredit=-1 maxrepeat=3 reject_username enforce_for_root' /etc/pam.d/common-password
+              fi
+            # Account lockout: lock after 5 failed attempts, unlock after 900s
+            - |
+              if ! grep -q 'pam_faillock' /etc/pam.d/common-auth; then
+                sed -i '/pam_unix.so/i auth required pam_faillock.so preauth silent audit deny=5 unlock_time=900' /etc/pam.d/common-auth
+                sed -i '/pam_unix.so/a auth [default=die] pam_faillock.so authfail audit deny=5 unlock_time=900' /etc/pam.d/common-auth
+              fi
             # Lock inactive accounts after 30 days
             - useradd -D -f 30
 
-      # ── Disable unnecessary services ──────────────────────────
+      # ── 4. Disable unnecessary services ───────────────────────
       - name: DisableServices
         action: ExecuteBash
         inputs:
           commands:
-            - for svc in avahi-daemon cups postfix rpcbind nfs bluetooth; do
-                systemctl disable $svc 2>/dev/null || true
-                systemctl stop $svc 2>/dev/null || true
+            - |
+              for svc in avahi-daemon cups postfix rpcbind nfs-server bluetooth apport whoopsie; do
+                systemctl disable "$svc" 2>/dev/null || true
+                systemctl stop    "$svc" 2>/dev/null || true
               done
+            # Purge bluetooth entirely — not needed on a server AMI
+            - apt-get purge -y bluez 2>/dev/null || true
+            # Disable core dumps via systemd as well
+            - mkdir -p /etc/systemd/coredump.conf.d
+            - printf '[Coredump]\nStorage=none\nProcessSizeMax=0\n' > /etc/systemd/coredump.conf.d/disable.conf
 
-      # ── Install and configure auditd ──────────────────────────
+      # ── 5. AppArmor ────────────────────────────────────────────
+      # Ubuntu 24.04 ships AppArmor enabled; ensure it is enforcing.
+      - name: ConfigureAppArmor
+        action: ExecuteBash
+        inputs:
+          commands:
+            - apt-get install -y apparmor apparmor-utils apparmor-profiles apparmor-profiles-extra
+            - systemctl enable apparmor
+            - systemctl start  apparmor
+            # Set all loaded profiles to enforce mode
+            - aa-enforce /etc/apparmor.d/* 2>/dev/null || true
+            - apparmor_status
+
+      # ── 6. auditd ──────────────────────────────────────────────
       - name: ConfigureAuditd
         action: ExecuteBash
         inputs:
           commands:
-            - yum install -y audit audit-libs
+            - apt-get install -y auditd audispd-plugins
             - systemctl enable auditd
             - |
-              cat > /etc/audit/rules.d/hardening.rules << 'AUDIT'
-              # Log all authentication attempts
-              -w /etc/passwd -p wa -k identity
-              -w /etc/group -p wa -k identity
-              -w /etc/shadow -p wa -k identity
-              -w /etc/sudoers -p wa -k sudoers
-              # Log privileged commands
-              -a always,exit -F arch=b64 -S execve -F euid=0 -k privileged
-              # Log network configuration changes
-              -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
-              # Log mount operations
-              -a always,exit -F arch=b64 -S mount -k mounts
-              # Log file deletion
-              -a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -k delete
-              AUDIT
-            - service auditd restart
+              cat > /etc/audit/rules.d/99-hardening.rules << 'AUDIT'
+              # Delete existing rules
+              -D
+              # Buffer size
+              -b 8192
+              # Failure mode: 1=log, 2=panic
+              -f 1
 
-      # ── Install security and scanning tools ───────────────────
+              # ── Identity files ──
+              -w /etc/passwd  -p wa -k identity
+              -w /etc/group   -p wa -k identity
+              -w /etc/shadow  -p wa -k identity
+              -w /etc/gshadow -p wa -k identity
+              -w /etc/sudoers -p wa -k sudoers
+              -w /etc/sudoers.d/ -p wa -k sudoers
+
+              # ── Login/logout events ──
+              -w /var/log/faillog  -p wa -k logins
+              -w /var/log/lastlog  -p wa -k logins
+              -w /var/log/tallylog -p wa -k logins
+
+              # ── Session initiation ──
+              -w /var/run/utmp  -p wa -k session
+              -w /var/log/wtmp  -p wa -k session
+              -w /var/log/btmp  -p wa -k session
+
+              # ── Privileged command execution ──
+              -a always,exit -F arch=b64 -S execve -F euid=0 -k privileged
+              -a always,exit -F arch=b32 -S execve -F euid=0 -k privileged
+
+              # ── Privilege escalation ──
+              -a always,exit -F arch=b64 -S setuid  -F a0=0 -F exe=/usr/bin/su    -k privilege_escalation
+              -a always,exit -F arch=b64 -S setresuid -F a0=0 -F exe=/usr/bin/sudo -k privilege_escalation
+
+              # ── Network configuration changes ──
+              -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+              -w /etc/hosts       -p wa -k system-locale
+              -w /etc/network/    -p wa -k system-locale
+              -w /etc/netplan/    -p wa -k system-locale
+
+              # ── Mount operations ──
+              -a always,exit -F arch=b64 -S mount   -k mounts
+              -a always,exit -F arch=b64 -S umount2 -k mounts
+
+              # ── File deletion ──
+              -a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -k delete
+              -a always,exit -F arch=b32 -S unlink -S unlinkat -S rename -S renameat -k delete
+
+              # ── Kernel module loading ──
+              -w /sbin/insmod  -p x -k modules
+              -w /sbin/rmmod   -p x -k modules
+              -w /sbin/modprobe -p x -k modules
+              -a always,exit -F arch=b64 -S init_module -S delete_module -k modules
+
+              # ── Time changes ──
+              -a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change
+              -w /etc/localtime -p wa -k time-change
+
+              # ── AppArmor policy changes ──
+              -w /etc/apparmor/       -p wa -k apparmor
+              -w /etc/apparmor.d/     -p wa -k apparmor
+
+              # ── Make rules immutable (requires reboot to change) ──
+              -e 2
+              AUDIT
+            - augenrules --load 2>/dev/null || service auditd restart
+
+      # ── 7. Install security and scanning tools ────────────────
       - name: InstallSecurityTools
         action: ExecuteBash
         inputs:
           commands:
-            - yum install -y clamav clamav-update rkhunter aide
+            - apt-get install -y clamav clamav-freshclam rkhunter aide
+            # Update ClamAV signatures
+            - systemctl stop clamav-freshclam 2>/dev/null || true
             - freshclam
+            # rkhunter: update signatures and baseline
             - rkhunter --update
             - rkhunter --propupd
-            # Initialise AIDE database for file integrity monitoring
-            - aide --init
-            - mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+            # AIDE: initialise file integrity database
+            # (run at end of build so the DB reflects the hardened state)
+            - aide --config /etc/aide/aide.conf --init
+            - mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
 
-      # ── Disable USB storage ───────────────────────────────────
+      # ── 8. Disable USB storage ────────────────────────────────
       - name: DisableUSB
         action: ExecuteBash
         inputs:
           commands:
-            - echo "install usb-storage /bin/true" > /etc/modprobe.d/usb-storage.conf
-            - echo "blacklist usb-storage" >> /etc/modprobe.d/blacklist.conf
+            - echo "install usb-storage /bin/false" > /etc/modprobe.d/usb-storage.conf
+            - echo "blacklist usb-storage"          >> /etc/modprobe.d/blacklist.conf
+            - update-initramfs -u
 
-      # ── Set umask and file permissions ─────────────────────────
+      # ── 9. File permissions and umask ─────────────────────────
       - name: FilePermissions
         action: ExecuteBash
         inputs:
           commands:
             - sed -i 's/^UMASK.*/UMASK 027/' /etc/login.defs
+            # Also set umask in /etc/profile.d for interactive shells
+            - echo 'umask 027' > /etc/profile.d/umask.sh
             - chmod 600 /etc/ssh/sshd_config
             - chmod 700 /root
             - chmod 600 /etc/crontab
             - chmod 700 /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly
+            # Restrict access to sensitive logs
+            - chmod 640 /var/log/syslog  2>/dev/null || true
+            - chmod 640 /var/log/auth.log 2>/dev/null || true
 
-      # ── Clean up before imaging ────────────────────────────────
+      # ── 10. Motd / legal banner ───────────────────────────────
+      - name: SetLoginBanner
+        action: ExecuteBash
+        inputs:
+          commands:
+            - |
+              cat > /etc/issue.net << 'BANNER'
+              ******************************************************************
+              * AUTHORIZED ACCESS ONLY                                         *
+              * This system is for authorized users only. All activity may be  *
+              * monitored and reported. Unauthorized access is prohibited.     *
+              ******************************************************************
+              BANNER
+            - cp /etc/issue.net /etc/issue
+            - sed -i 's/^#*Banner.*/Banner \/etc\/issue.net/' /etc/ssh/sshd_config.d/99-hardening.conf
+
+      # ── 11. Cleanup ───────────────────────────────────────────
       - name: Cleanup
         action: ExecuteBash
         inputs:
           commands:
-            - yum clean all
-            - rm -rf /var/cache/yum
+            - apt-get autoremove -y
+            - apt-get clean
+            - rm -rf /var/lib/apt/lists/*
             - find /var/log -type f -exec truncate -s 0 {} \;
             - rm -f /root/.bash_history
             - find /home -name ".bash_history" -exec rm -f {} \;
             - rm -rf /tmp/* /var/tmp/*
+            # Remove SSH host keys — regenerated on first boot
+            - rm -f /etc/ssh/ssh_host_*
+            # Remove cloud-init artefacts so instance gets a clean first boot
+            - cloud-init clean --logs 2>/dev/null || true
 
   - name: validate
     steps:
@@ -403,10 +597,26 @@ phases:
         action: ExecuteBash
         inputs:
           commands:
-            - grep -E "^PermitRootLogin no" /etc/ssh/sshd_config || exit 1
-            - grep -E "^PasswordAuthentication no" /etc/ssh/sshd_config || exit 1
-            - sysctl net.ipv4.tcp_syncookies | grep -q "= 1" || exit 1
-            - echo "Hardening validation passed"
+            # SSH
+            - grep -E "PermitRootLogin no"        /etc/ssh/sshd_config.d/99-hardening.conf || exit 1
+            - grep -E "PasswordAuthentication no"  /etc/ssh/sshd_config.d/99-hardening.conf || exit 1
+            - grep -E "X11Forwarding no"           /etc/ssh/sshd_config.d/99-hardening.conf || exit 1
+            # Kernel
+            - sysctl net.ipv4.tcp_syncookies       | grep -q "= 1" || exit 1
+            - sysctl kernel.randomize_va_space      | grep -q "= 2" || exit 1
+            - sysctl kernel.kptr_restrict           | grep -q "= 2" || exit 1
+            - sysctl kernel.yama.ptrace_scope       | grep -q "= 2" || exit 1
+            # AppArmor
+            - systemctl is-active apparmor          || exit 1
+            # auditd
+            - systemctl is-active auditd            || exit 1
+            - auditctl -l | grep -q "identity"      || exit 1
+            # File permissions
+            - [ $(stat -c %a /etc/ssh/sshd_config) = "600" ] || exit 1
+            - [ $(stat -c %a /root) = "700" ]                 || exit 1
+            # USB storage blocked
+            - grep -q "install usb-storage /bin/false" /etc/modprobe.d/usb-storage.conf || exit 1
+            - echo "All hardening validations passed"
 EOF
   tags = {
     Name      = "security-hardening"
@@ -425,7 +635,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = var.primary_region
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = module.ami_encryption.arn # ← add this
+      kms_key_id = module.ami_encryption.arn  # us-east-1 primary key
       ami_tags = {
         SourceAMI   = "{{ imagebuilder:sourceImage }}"
         BuildDate   = "{{ imagebuilder:buildDate }}"
@@ -434,8 +644,6 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
         ManagedBy   = "terraform"
       }
       launch_permission {
-        # Restrict who can launch from this AMI
-        # Only your own account — remove if you need to share cross-account
         user_ids = [data.aws_caller_identity.current.account_id]
       }
     }
@@ -445,10 +653,15 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "eu-west-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = module.ami_encryption.arn
+      kms_key_id = aws_kms_replica_key.ami_encryption_eu_west.arn  # eu-west-1 replica key
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
+        Project   = var.project
+        ManagedBy = "terraform"
+      }
+      launch_permission {
+        user_ids = [data.aws_caller_identity.current.account_id]
       }
     }
   }
@@ -457,10 +670,15 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "ap-southeast-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = module.ami_encryption.arn
+      kms_key_id = aws_kms_replica_key.ami_encryption_ap_southeast.arn  # ap-southeast-1 replica key
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
+        Project   = var.project
+        ManagedBy = "terraform"
+      }
+      launch_permission {
+        user_ids = [data.aws_caller_identity.current.account_id]
       }
     }
   }
@@ -1041,7 +1259,7 @@ module "ami_artifacts_s3_4xx" {
 resource "aws_securityhub_account" "main" {}
 
 resource "aws_securityhub_standards_subscription" "cis" {
-  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.2.0"
+  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.4.0"
   depends_on    = [aws_securityhub_account.main]
 }
 
