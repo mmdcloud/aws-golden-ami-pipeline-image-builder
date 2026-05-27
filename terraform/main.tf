@@ -30,80 +30,141 @@ module "image_builder_vpc" {
 # --------------------------------------------------------------------------------
 # IAM Role for EC2 Image Builder
 # --------------------------------------------------------------------------------
-resource "aws_iam_role" "image_builder" {
-  name = "ec2-image-builder-role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
+module "image_builder" {
+  source             = "./modules/iam"
+  role_name          = "ec2-image-builder-role"
+  role_description   = "IAM role for Image Builder"
+  policy_name        = "ec2-image-builder-role-policy"
+  policy_description = "IAM policy for Image Builder"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "ec2.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": [
+                  "kms:GenerateDataKey",
+                  "kms:Decrypt",
+                  "kms:ReEncrypt*",
+                  "kms:DescribeKey",
+                  "kms:CreateGrant"
+                ],
+                "Resource": [
+                  "${module.ami_encryption.arn}",
+                  "${aws_kms_replica_key.ami_encryption_eu_west.arn}",
+                  "${aws_kms_replica_key.ami_encryption_ap_southeast.arn}"
+                ],
+                "Effect": "Allow"
+            },
+            {
+                "Action": [
+                  "s3:PutObject",
+                  "s3:GetObject",
+                  "s3:GetBucketLocation",
+                  "s3:ListBucket"
+                ],
+                "Resource": [
+                  "${module.ami_artifacts.arn}",
+                  "${module.ami_artifacts.arn}/*"
+                ],
+                "Effect": "Allow"
+            }
+        ]
+    }
+    EOF
   tags = {
-    Name      = "ec2-image-builder-role"
-    ManagedBy = "terraform"
-    Project   = var.project
+    Name = "ami-factory-cloudtrail-cw-role"
   }
 }
 
+# resource "aws_iam_role" "image_builder" {
+#   name = "ec2-image-builder-role"
+#   assume_role_policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [
+#       {
+#         Action = "sts:AssumeRole"
+#         Effect = "Allow"
+#         Principal = {
+#           Service = "ec2.amazonaws.com"
+#         }
+#       }
+#     ]
+#   })
+#   tags = {
+#     Name      = "ec2-image-builder-role"
+#     ManagedBy = "terraform"
+#     Project   = var.project
+#   }
+# }
+
 resource "aws_iam_role_policy_attachment" "image_builder_policy_attachment" {
-  role       = aws_iam_role.image_builder.name
+  role       = module.image_builder.name
   policy_arn = "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder"
 }
 
 resource "aws_iam_role_policy_attachment" "ssm" {
-  role       = aws_iam_role.image_builder.name
+  role       = module.image_builder.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_instance_profile" "image_builder" {
   name = "EC2ImageBuilderInstanceProfile"
-  role = aws_iam_role.image_builder.name
+  role = module.image_builder.name
 }
 
-resource "aws_iam_role_policy" "image_builder_kms" {
-  name = "ec2-image-builder-kms-policy"
-  role = aws_iam_role.image_builder.id
+# resource "aws_iam_role_policy" "image_builder_kms" {
+#   name = "ec2-image-builder-kms-policy"
+#   role = module.image_builder.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "kms:GenerateDataKey",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:DescribeKey",
-          "kms:CreateGrant"
-        ]
-        Resource = [
-          module.ami_encryption.arn,
-          aws_kms_replica_key.ami_encryption_eu_west.arn,
-          aws_kms_replica_key.ami_encryption_ap_southeast.arn,
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:GetBucketLocation",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          module.ami_artifacts.arn,
-          "${module.ami_artifacts.arn}/*"
-        ]
-      }
-    ]
-  })
-}
+#   policy = jsonencode({
+#     Version = "2012-10-17"
+#     Statement = [
+#       {
+#         Effect = "Allow"
+#         Action = [
+#           "kms:GenerateDataKey",
+#           "kms:Decrypt",
+#           "kms:ReEncrypt*",
+#           "kms:DescribeKey",
+#           "kms:CreateGrant"
+#         ]
+#         Resource = [
+#           module.ami_encryption.arn,
+#           aws_kms_replica_key.ami_encryption_eu_west.arn,
+#           aws_kms_replica_key.ami_encryption_ap_southeast.arn
+#         ]
+#       },
+#       {
+#         Effect = "Allow"
+#         Action = [
+#           "s3:PutObject",
+#           "s3:GetObject",
+#           "s3:GetBucketLocation",
+#           "s3:ListBucket"
+#         ]
+#         Resource = [
+#           module.ami_artifacts.arn,
+#           "${module.ami_artifacts.arn}/*"
+#         ]
+#       }
+#     ]
+#   })
+# }
 
 # --------------------------------------------------------------------------------
 # Security Groups for Image Builder instances
@@ -226,6 +287,89 @@ resource "aws_kms_replica_key" "ami_encryption_ap_southeast" {
     ManagedBy = "terraform"
     Project   = var.project
   }
+}
+
+resource "aws_kms_key_policy" "ami_encryption" {
+  key_id = module.ami_encryption.key_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+
+      # ── 1. Root account retains full administrative control ──────────────────
+      {
+        Sid    = "EnableRootAdminAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+
+      # ── 2. CloudWatch Logs (log group encryption) ────────────────────────────
+      # Required by: /aws/cloudtrail/ami-factory  and  /aws/imagebuilder/ami-factory
+      {
+        Sid    = "AllowCloudWatchLogs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${var.primary_region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt*",
+          "kms:Decrypt*",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*"
+        ]
+        Resource = "*"
+        Condition = {
+          ArnLike = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
+      },
+
+      # ── 3. CloudTrail (trail log encryption) ─────────────────────────────────
+      # Required by: aws_cloudtrail.ami_factory
+      {
+        Sid    = "AllowCloudTrailEncrypt"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+        Action = [
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+        Condition = {
+          StringLike = {
+            "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"
+          }
+        }
+      },
+
+      # ── 4. Image Builder IAM role (EBS encryption + S3 artifact uploads) ─────
+      # Mirrors the inline policy on aws_iam_role_policy.image_builder_kms but
+      # the key policy must also permit these actions for them to succeed.
+      {
+        Sid    = "AllowImageBuilderRole"
+        Effect = "Allow"
+        Principal = {
+          AWS = module.image_builder.arn
+        }
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:DescribeKey",
+          "kms:CreateGrant"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
 resource "aws_imagebuilder_image_recipe" "base_linux" {
@@ -635,7 +779,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = var.primary_region
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = module.ami_encryption.arn  # us-east-1 primary key
+      kms_key_id = module.ami_encryption.arn # us-east-1 primary key
       ami_tags = {
         SourceAMI   = "{{ imagebuilder:sourceImage }}"
         BuildDate   = "{{ imagebuilder:buildDate }}"
@@ -653,7 +797,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "eu-west-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = aws_kms_replica_key.ami_encryption_eu_west.arn  # eu-west-1 replica key
+      kms_key_id = aws_kms_replica_key.ami_encryption_eu_west.arn # eu-west-1 replica key
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
@@ -670,7 +814,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
     region = "ap-southeast-1"
     ami_distribution_configuration {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
-      kms_key_id = aws_kms_replica_key.ami_encryption_ap_southeast.arn  # ap-southeast-1 replica key
+      kms_key_id = aws_kms_replica_key.ami_encryption_ap_southeast.arn # ap-southeast-1 replica key
       ami_tags = {
         SourceAMI = "{{ imagebuilder:sourceImage }}"
         BuildDate = "{{ imagebuilder:buildDate }}"
@@ -1197,6 +1341,46 @@ resource "aws_cloudwatch_log_metric_filter" "pipeline_failures" {
   }
 }
 
+resource "aws_cloudwatch_log_resource_policy" "eventbridge_imagebuilder" {
+  policy_name = "eventbridge-ami-factory-imagebuilder-logs"
+
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowEventBridgeWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = [
+            "events.amazonaws.com",
+            "delivery.logs.amazonaws.com"
+          ]
+        }
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.image_builder.arn}:*"
+        Condition = {
+          ArnLike = {
+            "aws:SourceArn" = "arn:aws:events:${var.primary_region}:${data.aws_caller_identity.current.account_id}:rule/ami-creation-event"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "imagebuilder_to_cwlogs" {
+  rule      = "ami-creation-event" # must match rule_name in module.ami_events_rule
+  target_id = "ImageBuilderStateToCWLogs"
+  arn       = aws_cloudwatch_log_group.image_builder.arn
+
+  depends_on = [
+    aws_cloudwatch_log_resource_policy.eventbridge_imagebuilder
+  ]
+}
+
 module "pipeline_failures" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-pipeline-failures"
@@ -1259,7 +1443,7 @@ module "ami_artifacts_s3_4xx" {
 resource "aws_securityhub_account" "main" {}
 
 resource "aws_securityhub_standards_subscription" "cis" {
-  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/1.4.0"
+  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/3.0.0"
   depends_on    = [aws_securityhub_account.main]
 }
 
