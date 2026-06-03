@@ -8,6 +8,11 @@ variable "primary_region" {
   }
 }
 
+variable "recipe_version" {
+  description = "Image builder recipe version"
+  type        = string
+}
+
 variable "notification_email" {
   description = "Email address to receive AMI pipeline build results, Inspector findings, and Security Hub critical alerts."
   type        = string
