@@ -7,6 +7,7 @@ output "arn" {
 output "objects" {
   value = aws_s3_object.object[*]
 }
+
 output "id" {
   value = aws_s3_bucket.bucket.id
 }
