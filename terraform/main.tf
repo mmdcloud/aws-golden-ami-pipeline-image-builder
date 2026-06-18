@@ -170,7 +170,7 @@ module "ami_artifacts" {
     }
   ]
   versioning_enabled = "Enabled"
-  force_destroy      = false
+  force_destroy      = true
   tags = {
     Name      = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
     ManagedBy = "terraform"
@@ -209,6 +209,7 @@ module "ami_encryption" {
   source                  = "./modules/kms"
   name                    = "ami-encryption-key"
   description             = "KMS key for AMI EBS encryption"
+  multi_region            = true
   deletion_window_in_days = 30
   enable_key_rotation     = true
   tags = {
@@ -339,18 +340,14 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
       encrypted             = true
       kms_key_id            = module.ami_encryption.arn
     }
+  } 
+
+  component {
+    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/update-linux/1.0.2"
   }
 
   component {
-    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/inspector-test-linux/x.x.x"
-  }
-
-  component {
-    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/update-linux/x.x.x"
-  }
-
-  component {
-    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/amazon-cloudwatch-agent-linux/x.x.x"
+    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/amazon-cloudwatch-agent-linux/1.0.1"
   }
 
   component {
@@ -700,7 +697,7 @@ module "config_logs" {
     }
   ]
   versioning_enabled = "Disabled"
-  force_destroy      = false
+  force_destroy      = true
   tags = {
     Name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
   }
@@ -871,7 +868,7 @@ module "cloudtrail_logs" {
     }
   ]
   versioning_enabled = "Disabled"
-  force_destroy      = false
+  force_destroy      = true
   tags = {
     Name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
   }
@@ -1082,7 +1079,7 @@ module "ami_artifacts_s3_4xx" {
 resource "aws_securityhub_account" "main" {}
 
 resource "aws_securityhub_standards_subscription" "cis" {
-  standards_arn = "arn:aws:securityhub:::ruleset/cis-aws-foundations-benchmark/v/3.0.0"
+  standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/cis-aws-foundations-benchmark/v/3.0.0"
   depends_on    = [aws_securityhub_account.main]
 }
 
