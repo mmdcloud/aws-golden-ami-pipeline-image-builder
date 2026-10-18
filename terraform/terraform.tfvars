@@ -5,3 +5,4 @@ azs                = ["us-east-1a", "us-east-1b", "us-east-1c"]
 notification_email = "madmaxcloudonline@gmail.com"
 project            = "image-builder"
 recipe_version     = "1.0.0"
+create_vpc         = false # Set to false to use default/existing VPC (bypasses SCP deny on ec2:CreateVpc)

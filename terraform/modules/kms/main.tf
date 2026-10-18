@@ -1,9 +1,9 @@
 resource "aws_kms_key" "key" {
   description             = var.description
-  multi_region = var.multi_region
+  multi_region            = var.multi_region
   deletion_window_in_days = var.deletion_window_in_days
   enable_key_rotation     = var.enable_key_rotation
-  tags = var.tags
+  tags                    = var.tags
 }
 
 resource "aws_kms_alias" "alias" {

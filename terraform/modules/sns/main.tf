@@ -4,8 +4,11 @@ data "aws_iam_policy_document" "sns_topic_policy_document" {
     effect  = "Allow"
     actions = ["SNS:Publish"]
     principals {
-      type        = "Service"
-      identifiers = ["events.amazonaws.com"]
+      type = "Service"
+      identifiers = [
+        "events.amazonaws.com",
+        "cloudwatch.amazonaws.com"
+      ]
     }
     resources = [aws_sns_topic.topic.arn]
   }
@@ -19,7 +22,7 @@ resource "aws_sns_topic_policy" "sns_topic_policy" {
 # SNS Topic for notifying users about the state changes in MediaConvert Job
 resource "aws_sns_topic" "topic" {
   name = var.topic_name
-  tags =var.tags
+  tags = var.tags
 }
 
 # SNS Subscription

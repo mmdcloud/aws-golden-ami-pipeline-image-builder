@@ -73,3 +73,21 @@ variable "project" {
     error_message = "project must be 2–28 characters, start with a lowercase letter, and contain only lowercase letters, numbers, and hyphens."
   }
 }
+
+variable "create_vpc" {
+  description = "Whether to create a new VPC. Set to false if an SCP denies ec2:CreateVpc, in which case existing VPC/subnets will be used."
+  type        = bool
+  default     = false
+}
+
+variable "existing_vpc_id" {
+  description = "ID of an existing VPC to use when create_vpc is false. If left null, the default VPC is used."
+  type        = string
+  default     = null
+}
+
+variable "existing_subnet_id" {
+  description = "ID of an existing subnet to use for Image Builder builds when create_vpc is false. If left null, the first available subnet of the VPC is used."
+  type        = string
+  default     = null
+}

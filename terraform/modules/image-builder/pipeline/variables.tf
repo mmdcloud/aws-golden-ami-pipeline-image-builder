@@ -228,33 +228,33 @@ variable "distribution_description" {
 variable "distribution_regions" {
   description = "List of regions and their distribution configurations"
   type = list(object({
-    region              = string
-    ami_name_pattern    = string
-    ami_description     = optional(string)
-    ami_tags            = optional(map(string), {})
-    kms_key_id          = optional(string)
-    target_account_ids  = optional(list(string))
-    
+    region             = string
+    ami_name_pattern   = string
+    ami_description    = optional(string)
+    ami_tags           = optional(map(string), {})
+    kms_key_id         = optional(string)
+    target_account_ids = optional(list(string))
+
     launch_permission = optional(object({
       organization_arns        = optional(list(string))
       organizational_unit_arns = optional(list(string))
       user_groups              = optional(list(string))
       user_ids                 = optional(list(string))
     }))
-    
+
     # Container distribution
     container_repository_name = optional(string)
     container_service         = optional(string, "ECR")
     container_tags            = optional(list(string), [])
     container_description     = optional(string)
-    
+
     # Launch template configurations
     launch_template_configurations = optional(list(object({
       launch_template_id = optional(string)
       account_id         = optional(string)
       default            = optional(bool, false)
     })), [])
-    
+
     # License configurations
     license_configuration_arns = optional(list(string))
   }))

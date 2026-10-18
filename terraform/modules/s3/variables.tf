@@ -38,20 +38,24 @@ variable "bucket_notification" {
   }
 }
 variable "block_public_acls" {
-  default = false
+  type    = bool
+  default = true
 }
 variable "block_public_policy" {
-  default = false
+  type    = bool
+  default = true
 }
 variable "ignore_public_acls" {
-  default = false
+  type    = bool
+  default = true
 }
 variable "restrict_public_buckets" {
-  default = false
+  type    = bool
+  default = true
 }
 variable "tags" {
-  type = map(string)
-  default = {}    
+  type    = map(string)
+  default = {}
 }
 # variable "lifecycle_policies" {
 #   type = list(object({

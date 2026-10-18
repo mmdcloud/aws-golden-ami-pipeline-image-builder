@@ -8,12 +8,12 @@ resource "aws_imagebuilder_component" "this" {
   description = var.description
   platform    = var.platform
   version     = var.version
-  
+
   data = var.component_data != null ? var.component_data : templatefile(
     var.component_template_path,
     var.component_template_vars
   )
-   
+
   supported_os_versions = var.supported_os_versions
 
   # KMS encryption for component data (if provided)

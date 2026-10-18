@@ -23,13 +23,13 @@ output "distribution_config_arn" {
 # ── Networking ────────────────────────────────────────────────────────────────
 
 output "vpc_id" {
-  description = "ID of the Image Builder VPC."
-  value       = module.image_builder_vpc.vpc_id
+  description = "ID of the VPC used for Image Builder builds."
+  value       = local.vpc_id
 }
 
-output "private_subnet_ids" {
-  description = "IDs of the private subnets used for Image Builder build instances."
-  value       = module.image_builder_vpc.private_subnets
+output "build_subnet_id" {
+  description = "ID of the subnet used for Image Builder build instances."
+  value       = local.build_subnet_id
 }
 
 # ── Encryption ────────────────────────────────────────────────────────────────

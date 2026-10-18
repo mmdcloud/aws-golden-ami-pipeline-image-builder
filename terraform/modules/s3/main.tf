@@ -28,6 +28,7 @@ resource "aws_s3_bucket_versioning" "versioning" {
 
 # Bucket cors configuration
 resource "aws_s3_bucket_cors_configuration" "cors" {
+  count  = length(var.cors) > 0 ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
   dynamic "cors_rule" {
     for_each = var.cors
@@ -40,6 +41,18 @@ resource "aws_s3_bucket_cors_configuration" "cors" {
   }
 }
 
+# Bucket server side encryption configuration
+resource "aws_s3_bucket_server_side_encryption_configuration" "sse" {
+  bucket = aws_s3_bucket.bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
 # Bucket policy
 resource "aws_s3_bucket_policy" "bucket_policy" {
   count  = var.bucket_policy != "" ? 1 : 0
@@ -49,7 +62,8 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
 
 # Specifying bucket notification configuration
 resource "aws_s3_bucket_notification" "bucket_notification" {
-  bucket = aws_s3_bucket.bucket.bucket
+  count  = (length(var.bucket_notification.queue) > 0 || length(var.bucket_notification.lambda_function) > 0) ? 1 : 0
+  bucket = aws_s3_bucket.bucket.id
   dynamic "queue" {
     for_each = var.bucket_notification.queue
     content {

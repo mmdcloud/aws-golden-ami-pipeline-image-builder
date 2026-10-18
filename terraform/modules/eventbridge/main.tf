@@ -1,9 +1,9 @@
 # EventBridge Rule for AMI Creation Notifications
 resource "aws_cloudwatch_event_rule" "rule" {
-  name        = var.rule_name
-  description = var.description
+  name          = var.rule_name
+  description   = var.description
   event_pattern = var.event_pattern
-  tags =var.tags
+  tags          = var.tags
 }
 
 resource "aws_cloudwatch_event_target" "target" {

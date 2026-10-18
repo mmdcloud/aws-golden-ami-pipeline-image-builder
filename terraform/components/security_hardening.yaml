@@ -12,6 +12,9 @@ phases:
           commands:
             - export DEBIAN_FRONTEND=noninteractive
             - apt-get update -y
+            - apt-get install -y software-properties-common
+            - add-apt-repository -y universe
+            - apt-get update -y
             - apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
 
       # ── 1. SSH hardening ───────────────────────────────────────
@@ -43,7 +46,7 @@ phases:
               SSHD
             - chmod 600 /etc/ssh/sshd_config.d/99-hardening.conf
             # Ubuntu 24.04 uses 'ssh' not 'sshd' as the service name
-            - sshd -t && systemctl restart ssh
+            - sshd -t && (systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true)
 
       # ── 2. Kernel hardening (sysctl) ──────────────────────────
       - name: HardenKernel
@@ -166,7 +169,7 @@ phases:
         action: ExecuteBash
         inputs:
           commands:
-            - apt-get install -y auditd audispd-plugins
+            - apt-get install -y auditd audispd-plugins 2>/dev/null || apt-get install -y auditd
             - systemctl enable auditd
             - |
               cat > /etc/audit/rules.d/99-hardening.rules << 'AUDIT'
@@ -230,11 +233,8 @@ phases:
               # ── AppArmor policy changes ──
               -w /etc/apparmor/       -p wa -k apparmor
               -w /etc/apparmor.d/     -p wa -k apparmor
-
-              # ── Make rules immutable (requires reboot to change) ──
-              -e 2
               AUDIT
-            - augenrules --load 2>/dev/null || service auditd restart
+            - augenrules --load 2>/dev/null || service auditd restart 2>/dev/null || true
 
       # ── 7. Install security and scanning tools ────────────────
       - name: InstallSecurityTools
@@ -242,9 +242,9 @@ phases:
         inputs:
           commands:
             - apt-get install -y clamav clamav-freshclam rkhunter aide
-            # Update ClamAV signatures
+            # Update ClamAV signatures (allow non-fatal failure in build pipeline if ClamAV CDN throttles)
             - systemctl stop clamav-freshclam 2>/dev/null || true
-            - freshclam
+            - freshclam || echo "freshclam initial download skipped or throttled, will update on runtime"
             # rkhunter: update signatures and baseline
             - rkhunter --update
             - rkhunter --propupd

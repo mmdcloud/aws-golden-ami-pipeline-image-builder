@@ -89,7 +89,7 @@ resource "aws_imagebuilder_image_recipe" "this" {
     for_each = var.aws_components
     content {
       component_arn = component.value.arn
-      
+
       dynamic "parameter" {
         for_each = lookup(component.value, "parameters", {})
         content {
@@ -167,9 +167,9 @@ resource "aws_imagebuilder_distribution_configuration" "this" {
           var.tags,
           lookup(distribution.value, "ami_tags", {}),
           {
-            SourceAMI   = "{{ imagebuilder:sourceImage }}"
-            BuildDate   = "{{ imagebuilder:buildDate }}"
-            RecipeName  = "{{ imagebuilder:recipeName }}"
+            SourceAMI    = "{{ imagebuilder:sourceImage }}"
+            BuildDate    = "{{ imagebuilder:buildDate }}"
+            RecipeName   = "{{ imagebuilder:recipeName }}"
             PipelineName = var.pipeline_name
           }
         )

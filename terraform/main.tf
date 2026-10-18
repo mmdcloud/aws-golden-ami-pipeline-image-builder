@@ -4,9 +4,30 @@
 data "aws_caller_identity" "current" {}
 
 # -----------------------------------------------------------------------------------------
-# VPC Configuration
+# VPC Configuration (Conditional creation to handle SCP restrictions on ec2:CreateVpc)
 # -----------------------------------------------------------------------------------------
+data "aws_vpc" "default" {
+  count   = var.create_vpc ? 0 : (var.existing_vpc_id == null ? 1 : 0)
+  default = true
+}
+
+data "aws_subnets" "default" {
+  count = var.create_vpc ? 0 : (var.existing_subnet_id == null ? 1 : 0)
+  filter {
+    name   = "vpc-id"
+    values = [var.existing_vpc_id != null ? var.existing_vpc_id : data.aws_vpc.default[0].id]
+  }
+}
+
+locals {
+  vpc_id = var.create_vpc ? module.image_builder_vpc[0].vpc_id : (var.existing_vpc_id != null ? var.existing_vpc_id : data.aws_vpc.default[0].id)
+  build_subnet_id = var.create_vpc ? module.image_builder_vpc[0].private_subnets[0] : (
+    var.existing_subnet_id != null ? var.existing_subnet_id : data.aws_subnets.default[0].ids[0]
+  )
+}
+
 module "image_builder_vpc" {
+  count                   = var.create_vpc ? 1 : 0
   source                  = "./modules/vpc"
   vpc_name                = "image-builder-vpc"
   vpc_cidr                = "10.0.0.0/16"
@@ -87,7 +108,9 @@ module "image_builder_role" {
     }
     EOF
   tags = {
-    Name = "ami-factory-cloudtrail-cw-role"
+    Name      = "ec2-image-builder-role"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -112,7 +135,7 @@ resource "aws_iam_instance_profile" "image_builder" {
 module "image_builder_sg" {
   source        = "./modules/security-groups"
   name          = "image-builder-sg"
-  vpc_id        = module.image_builder_vpc.vpc_id
+  vpc_id        = local.vpc_id
   ingress_rules = []
   egress_rules = [
     {
@@ -137,6 +160,7 @@ module "ami_artifacts" {
   source      = "./modules/s3"
   bucket_name = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
   objects     = []
+
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -155,22 +179,12 @@ module "ami_artifacts" {
       }
     ]
   })
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    },
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
+
+  cors = []
+
   versioning_enabled = "Enabled"
   force_destroy      = true
+
   tags = {
     Name      = "ami-artifacts-${data.aws_caller_identity.current.account_id}"
     ManagedBy = "terraform"
@@ -187,14 +201,16 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   instance_profile_name         = aws_iam_instance_profile.image_builder.name
   instance_types                = ["m5.large", "m5.xlarge"]
   security_group_ids            = [module.image_builder_sg.id]
-  subnet_id                     = module.image_builder_vpc.private_subnets[0]
+  subnet_id                     = local.build_subnet_id
   terminate_instance_on_failure = true
+
   logging {
     s3_logs {
       s3_bucket_name = module.ami_artifacts.id
       s3_key_prefix  = "logs"
     }
   }
+
   tags = {
     Name      = "golden-ami-config"
     ManagedBy = "terraform"
@@ -212,8 +228,11 @@ module "ami_encryption" {
   multi_region            = true
   deletion_window_in_days = 30
   enable_key_rotation     = true
+
   tags = {
-    Name = "ami-encryption-key"
+    Name      = "ami-encryption-key"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -223,6 +242,7 @@ resource "aws_kms_replica_key" "ami_encryption_eu_west" {
   primary_key_arn         = module.ami_encryption.arn
   deletion_window_in_days = 30
   enabled                 = true
+
   tags = {
     Name      = "ami-encryption-key-eu-west-1"
     ManagedBy = "terraform"
@@ -236,6 +256,7 @@ resource "aws_kms_replica_key" "ami_encryption_ap_southeast" {
   primary_key_arn         = module.ami_encryption.arn
   deletion_window_in_days = 30
   enabled                 = true
+
   tags = {
     Name      = "ami-encryption-key-ap-southeast-1"
     ManagedBy = "terraform"
@@ -321,6 +342,156 @@ resource "aws_kms_key_policy" "ami_encryption" {
           "kms:CreateGrant"
         ]
         Resource = "*"
+      },
+
+      # ── 5. Image Builder Service & Service-Linked Role ───────────────────────
+      {
+        Sid    = "AllowImageBuilderService"
+        Effect = "Allow"
+        Principal = {
+          Service = "imagebuilder.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAWSServiceRoleForImageBuilder"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_key_policy" "ami_encryption_eu_west" {
+  provider = aws.eu_west
+  key_id   = aws_kms_replica_key.ami_encryption_eu_west.key_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAdminAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowImageBuilderService"
+        Effect = "Allow"
+        Principal = {
+          Service = "imagebuilder.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAWSServiceRoleForImageBuilder"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_kms_key_policy" "ami_encryption_ap_southeast" {
+  provider = aws.ap_southeast
+  key_id   = aws_kms_replica_key.ami_encryption_ap_southeast.key_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAdminAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowImageBuilderService"
+        Effect = "Allow"
+        Principal = {
+          Service = "imagebuilder.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "AllowAWSServiceRoleForImageBuilder"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -332,7 +503,7 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   version      = var.recipe_version
 
   block_device_mapping {
-    device_name = "/dev/xvda"
+    device_name = "/dev/sda1"
     ebs {
       delete_on_termination = true
       volume_size           = 30
@@ -340,14 +511,14 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
       encrypted             = true
       kms_key_id            = module.ami_encryption.arn
     }
-  } 
-
-  component {
-    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/update-linux/1.0.2"
   }
 
   component {
-    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/amazon-cloudwatch-agent-linux/1.0.1"
+    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/update-linux/x.x.x"
+  }
+
+  component {
+    component_arn = "arn:aws:imagebuilder:${var.primary_region}:aws:component/amazon-cloudwatch-agent-linux/x.x.x"
   }
 
   component {
@@ -357,6 +528,7 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   lifecycle {
     create_before_destroy = true
   }
+
   tags = {
     Name      = "base-linux-recipe"
     ManagedBy = "terraform"
@@ -372,6 +544,7 @@ resource "aws_imagebuilder_component" "security_hardening" {
   platform = "Linux"
   version  = "1.0.0"
   data     = file("${path.module}/components/security_hardening.yaml")
+
   tags = {
     Name      = "security-hardening"
     ManagedBy = "terraform"
@@ -436,6 +609,12 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       }
     }
   }
+
+  tags = {
+    Name      = "multi-region-distribution"
+    ManagedBy = "terraform"
+    Project   = var.project
+  }
 }
 
 # --------------------------------------------------------------------------------
@@ -447,19 +626,24 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   image_recipe_arn                 = aws_imagebuilder_image_recipe.base_linux.arn
   infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.golden_ami.arn
   distribution_configuration_arn   = aws_imagebuilder_distribution_configuration.multi_region.arn
+
   schedule {
     schedule_expression                = "cron(0 0 ? * SUN *)" # Weekly builds
     pipeline_execution_start_condition = "EXPRESSION_MATCH_AND_DEPENDENCY_UPDATES_AVAILABLE"
   }
+
   enhanced_image_metadata_enabled = true
   status                          = "ENABLED"
+
   image_scanning_configuration {
     image_scanning_enabled = true
   }
+
   image_tests_configuration {
     image_tests_enabled = true
     timeout_minutes     = 60
   }
+
   tags = {
     Name      = "golden-ami-pipeline"
     ManagedBy = "terraform"
@@ -516,6 +700,7 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
   }
 
   tags = {
+    Name      = "golden-ami-lifecycle"
     ManagedBy = "terraform"
     Project   = var.project
   }
@@ -527,12 +712,14 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
 module "ami_events_sns" {
   source     = "./modules/sns"
   topic_name = "ami-creation-notifications"
+
   subscriptions = [
     {
       protocol = "email"
       endpoint = var.notification_email
     }
   ]
+
   tags = {
     Name      = "golden-ami-pipeline"
     ManagedBy = "terraform"
@@ -547,6 +734,7 @@ module "ami_events_rule" {
   source      = "./modules/eventbridge"
   rule_name   = "ami-creation-event"
   description = "Capture AMI creation events"
+
   event_pattern = jsonencode({
     source      = ["aws.imagebuilder"]
     detail-type = ["Image Builder Image State Change"]
@@ -556,8 +744,10 @@ module "ami_events_rule" {
       }
     }
   })
+
   target_id  = "SendToSNS"
   target_arn = module.ami_events_sns.topic_arn
+
   tags = {
     Name      = "ami-creation-event"
     ManagedBy = "terraform"
@@ -608,7 +798,9 @@ resource "aws_config_config_rule" "encrypted_volumes" {
   depends_on = [aws_config_configuration_recorder_status.main]
 
   tags = {
-    Project = var.project
+    Name      = "ami-factory-encrypted-volumes"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -627,7 +819,9 @@ resource "aws_config_config_rule" "approved_amis_by_tag" {
   depends_on = [aws_config_configuration_recorder_status.main]
 
   tags = {
-    Project = var.project
+    Name      = "ami-factory-approved-amis"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -635,6 +829,7 @@ module "config_logs" {
   source      = "./modules/s3"
   bucket_name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
   objects     = []
+
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -682,6 +877,7 @@ module "config_logs" {
       }
     ]
   })
+
   cors = [
     {
       allowed_headers = ["*"]
@@ -698,8 +894,11 @@ module "config_logs" {
   ]
   versioning_enabled = "Disabled"
   force_destroy      = true
+
   tags = {
-    Name = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+    Name      = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -716,7 +915,9 @@ resource "aws_iam_role" "config_role" {
   })
 
   tags = {
-    Project = var.project
+    Name      = "ami-factory-config-role"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -738,30 +939,15 @@ resource "aws_iam_role" "lifecycle_policy" {
   })
 
   tags = {
-    Name    = "ami-factory-lifecycle-role"
-    Project = var.project
+    Name      = "ami-factory-lifecycle-role"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
-resource "aws_iam_role_policy" "lifecycle_policy" {
-  name = "ami-factory-lifecycle-policy"
-  role = aws_iam_role.lifecycle_policy.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ec2:DeregisterImage",
-          "ec2:DescribeImages",
-          "ec2:DeleteSnapshot",
-          "ec2:DescribeSnapshots"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
+resource "aws_iam_role_policy_attachment" "lifecycle_policy" {
+  role       = aws_iam_role.lifecycle_policy.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/EC2ImageBuilderLifecycleExecutionPolicy"
 }
 
 # ---------------------------------------------------------------------------------
@@ -790,8 +976,9 @@ resource "aws_cloudtrail" "ami_factory" {
   cloud_watch_logs_role_arn  = module.cloudtrail_cw_role.arn
 
   tags = {
-    Name    = "ami-factory-trail"
-    Project = var.project
+    Name      = "ami-factory-trail"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 
   depends_on = [module.cloudtrail_logs]
@@ -803,8 +990,11 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
   kms_key_id        = module.ami_encryption.arn
 
   tags = {
-    Project = var.project
+    Name      = "/aws/cloudtrail/ami-factory"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
+
   depends_on = [module.ami_encryption]
 }
 
@@ -812,6 +1002,7 @@ module "cloudtrail_logs" {
   source      = "./modules/s3"
   bucket_name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
   objects     = []
+
   bucket_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -853,6 +1044,7 @@ module "cloudtrail_logs" {
       }
     ]
   })
+
   cors = [
     {
       allowed_headers = ["*"]
@@ -867,10 +1059,14 @@ module "cloudtrail_logs" {
       max_age_seconds = 3000
     }
   ]
+
   versioning_enabled = "Disabled"
   force_destroy      = true
+
   tags = {
-    Name = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+    Name      = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -880,6 +1076,7 @@ module "cloudtrail_cw_role" {
   role_description   = "IAM role for Cloudtrail logs"
   policy_name        = "cloudtrail-cw-logs-policy"
   policy_description = "IAM policy for Cloudtrail logs"
+
   assume_role_policy = <<EOF
     {
         "Version": "2012-10-17",
@@ -912,8 +1109,11 @@ module "cloudtrail_cw_role" {
         ]
     }
     EOF
+
   tags = {
-    Name = "ami-factory-cloudtrail-cw-role"
+    Name      = "ami-factory-cloudtrail-cw-role"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
 
@@ -930,6 +1130,7 @@ module "ami_factory_inspector_events_rule" {
   source      = "./modules/eventbridge"
   rule_name   = "ami-factory-inspector-critical"
   description = "Alert on Inspector CRITICAL findings during AMI builds"
+
   event_pattern = jsonencode({
     source      = ["aws.inspector2"]
     detail-type = ["Inspector2 Finding"]
@@ -941,8 +1142,10 @@ module "ami_factory_inspector_events_rule" {
       }
     }
   })
+
   target_id  = "InspectorCriticalToSNS"
   target_arn = module.ami_events_sns.topic_arn
+
   tags = {
     Name      = "ami-factory-inspector-critical"
     ManagedBy = "terraform"
@@ -959,8 +1162,11 @@ resource "aws_cloudwatch_log_group" "image_builder" {
   kms_key_id        = module.ami_encryption.arn
 
   tags = {
-    Project = var.project
+    Name      = "/aws/imagebuilder/ami-factory"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
+
   depends_on = [module.ami_encryption]
 }
 
@@ -1093,6 +1299,7 @@ module "securityhub_critical" {
   source      = "./modules/eventbridge"
   rule_name   = "securityhub-critical-event"
   description = "Capture Security Hub events"
+
   event_pattern = jsonencode({
     source      = ["aws.securityhub"]
     detail-type = ["Security Hub Findings - Imported"]
@@ -1106,8 +1313,10 @@ module "securityhub_critical" {
       }
     }
   })
+
   target_id  = "SecurityHubCriticalToSNS"
   target_arn = module.ami_events_sns.topic_arn
+
   tags = {
     Name      = "securityhub-critical-event"
     ManagedBy = "terraform"
