@@ -22,7 +22,7 @@ data "aws_subnets" "default" {
 locals {
   vpc_id = var.create_vpc ? module.image_builder_vpc[0].vpc_id : (var.existing_vpc_id != null ? var.existing_vpc_id : data.aws_vpc.default[0].id)
   build_subnet_id = var.create_vpc ? module.image_builder_vpc[0].private_subnets[0] : (
-    var.existing_subnet_id != null ? var.existing_subnet_id : data.aws_subnets.default[0].ids[0]
+    var.existing_subnet_id != null ? var.existing_subnet_id : sort(data.aws_subnets.default[0].ids)[0]
   )
 }
 
@@ -503,7 +503,7 @@ resource "aws_kms_key_policy" "ami_encryption_ap_southeast" {
 }
 
 resource "aws_imagebuilder_image_recipe" "base_linux" {
-  name         = "base-linux-recipe"
+  name         = "base-linux-recipe-${local.hardening_hash}"
   parent_image = "arn:aws:imagebuilder:${var.primary_region}:aws:image/ubuntu-server-24-lts-x86/x.x.x"
   version      = var.recipe_version
 
@@ -535,7 +535,7 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   }
 
   tags = {
-    Name      = "base-linux-recipe"
+    Name      = "base-linux-recipe-${local.hardening_hash}"
     ManagedBy = "terraform"
     Project   = var.project
   }
@@ -544,16 +544,22 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
 # --------------------------------------------------------------------------------
 # Custom Component for Security Hardening
 # --------------------------------------------------------------------------------
+locals {
+  hardening_hash = substr(filemd5("${path.module}/components/security_hardening.yaml"), 0, 8)
+}
+
 resource "aws_imagebuilder_component" "security_hardening" {
-  name     = "security-hardening"
+  name     = "security-hardening-${local.hardening_hash}"
   platform = "Linux"
   version  = "1.0.0"
   data     = file("${path.module}/components/security_hardening.yaml")
 
+  lifecycle {
+    create_before_destroy = true
+  }
+
   tags = {
-    Name      = "security-hardening"
-    ManagedBy = "terraform"
-    Project   = var.project
+    Name = "security-hardening-${local.hardening_hash}"
   }
 }
 
@@ -587,10 +593,11 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
       kms_key_id = aws_kms_replica_key.ami_encryption_eu_west.arn # eu-west-1 replica key
       ami_tags = {
-        SourceAMI = "{{ imagebuilder:sourceImage }}"
-        BuildDate = "{{ imagebuilder:buildDate }}"
-        Project   = var.project
-        ManagedBy = "terraform"
+        SourceAMI   = "{{ imagebuilder:sourceImage }}"
+        BuildDate   = "{{ imagebuilder:buildDate }}"
+        Environment = "production"
+        Project     = var.project
+        ManagedBy   = "terraform"
       }
       launch_permission {
         user_ids = [data.aws_caller_identity.current.account_id]
@@ -604,10 +611,11 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
       kms_key_id = aws_kms_replica_key.ami_encryption_ap_southeast.arn # ap-southeast-1 replica key
       ami_tags = {
-        SourceAMI = "{{ imagebuilder:sourceImage }}"
-        BuildDate = "{{ imagebuilder:buildDate }}"
-        Project   = var.project
-        ManagedBy = "terraform"
+        SourceAMI   = "{{ imagebuilder:sourceImage }}"
+        BuildDate   = "{{ imagebuilder:buildDate }}"
+        Environment = "production"
+        Project     = var.project
+        ManagedBy   = "terraform"
       }
       launch_permission {
         user_ids = [data.aws_caller_identity.current.account_id]
@@ -683,6 +691,20 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
       include_resources {
         amis      = true
         snapshots = true
+      }
+    }
+    filter {
+      type  = "AGE"
+      value = 180
+      unit  = "DAYS"
+    }
+    exclusion_rules {
+      amis {
+        is_public = false
+        last_launched {
+          value = 90
+          unit  = "DAYS"
+        }
       }
     }
   }
@@ -833,6 +855,19 @@ resource "aws_config_configuration_recorder_status" "main" {
   name       = aws_config_configuration_recorder.main.name
   is_enabled = true
   depends_on = [aws_config_delivery_channel.main]
+}
+
+resource "aws_ebs_encryption_by_default" "this" {
+  enabled = true
+}
+
+resource "aws_config_config_rule" "ebs_default_encryption" {
+  name = "ami-factory-ebs-default-encryption"
+  source {
+    owner             = "AWS"
+    source_identifier = "EC2_EBS_ENCRYPTION_BY_DEFAULT"
+  }
+  depends_on = [aws_config_configuration_recorder_status.main]
 }
 
 resource "aws_config_config_rule" "encrypted_volumes" {
@@ -1224,7 +1259,7 @@ module "ami_factory_inspector_events_rule" {
   })
 
   target_id  = "InspectorCriticalToSNS"
-  target_arn = module.ami_events_sns.topic_arn
+  target_arn = module.ami_security_sns.topic_arn
 
   tags = {
     Name      = "ami-factory-inspector-critical"
@@ -1321,7 +1356,7 @@ module "pipeline_failures" {
 resource "aws_cloudwatch_log_metric_filter" "kms_key_usage" {
   name           = "ami-factory-kms-usage"
   log_group_name = aws_cloudwatch_log_group.cloudtrail.name
-  pattern        = "{ ($.eventSource = \"kms.amazonaws.com\") && ($.eventName = \"Decrypt\" || $.eventName = \"GenerateDataKey\") && ($.resources[0].ARN = \"${module.ami_encryption.arn}\") }"
+  pattern        = "{ ($.eventSource = \"kms.amazonaws.com\") && ($.eventName = \"Decrypt\" || $.eventName = \"GenerateDataKey\" || $.eventName = \"GenerateDataKeyWithoutPlaintext\" || $.eventName = \"CreateGrant\") && ($.resources[0].ARN = \"${module.ami_encryption.arn}\") }"
 
   metric_transformation {
     name      = "KMSKeyUsage"
@@ -1354,8 +1389,8 @@ module "kms_key_usage_spike" {
   statistic           = "Sum"
   threshold           = 500
   alarm_description   = "Unusual Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
-  alarm_actions       = [module.ami_events_sns.topic_arn] # see section 6
-  ok_actions          = [module.ami_events_sns.topic_arn]
+  alarm_actions       = [module.ami_security_sns.topic_arn] # see section 6
+  ok_actions          = [module.ami_security_sns.topic_arn]
 }
 
 module "kms_access_denied" {
@@ -1369,30 +1404,9 @@ module "kms_access_denied" {
   statistic           = "Sum"
   threshold           = 0
   alarm_description   = "KMS AccessDenied seen in CloudTrail. Usually a missing key-policy statement for a build/launch role."
-  alarm_actions       = [module.ami_events_sns.topic_arn]
-  ok_actions          = [module.ami_events_sns.topic_arn]
+  alarm_actions       = [module.ami_security_sns.topic_arn]
+  ok_actions          = [module.ami_security_sns.topic_arn]
 }
-
-# S3 artifacts bucket — 4XX errors = broken component download during builds
-# module "ami_artifacts_s3_4xx" {
-#   source              = "./modules/cloudwatch/cloudwatch-alarm"
-#   alarm_name          = "ami-factory-artifacts-4xx"
-#   comparison_operator = "GreaterThanThreshold"
-#   evaluation_periods  = 1
-#   metric_name         = "4xxErrors"
-#   namespace           = "AWS/S3"
-#   period              = 300
-#   statistic           = "Sum"
-#   threshold           = 5
-#   alarm_description   = "S3 4XX errors on ami-artifacts bucket. Image Builder component downloads may be failing. Check bucket policy and IAM role permissions on ec2-image-builder-role."
-#   alarm_actions       = [module.ami_events_sns.topic_arn]
-#   ok_actions          = [module.ami_events_sns.topic_arn]
-
-#   dimensions = {
-#     BucketName = module.ami_artifacts.id
-#     FilterId   = "EntireBucket"
-#   }
-# }
 
 # ---------------------------------------------------------------------------------
 # SECURITY HUB — Aggregate Config, Inspector, CloudTrail findings in one place
@@ -1434,7 +1448,7 @@ module "securityhub_critical" {
   })
 
   target_id  = "SecurityHubCriticalToSNS"
-  target_arn = module.ami_events_sns.topic_arn
+  target_arn = module.ami_security_sns.topic_arn
 
   tags = {
     Name      = "securityhub-critical-event"

@@ -6,6 +6,9 @@
 
 An enterprise-grade, automated Golden AMI pipeline using AWS EC2 Image Builder with Terraform. This solution provides automated, secure, and compliant AMI builds with multi-region distribution and security hardening.
 
+
+
+
 ## 🏗️ Architecture
 
 ```
