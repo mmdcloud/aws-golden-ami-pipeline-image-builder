@@ -20,7 +20,7 @@ provider "aws" {
   default_tags {
     tags = {
       Environment = "Production"
-      Project     = "AMI Factory"
+      Project     = var.project
       ManagedBy   = "Terraform"
     }
   }
@@ -32,7 +32,7 @@ provider "aws" {
   default_tags {
     tags = {
       Environment = "Production"
-      Project     = "AMI Factory"
+      Project     = var.project
       ManagedBy   = "Terraform"
     }
   }
@@ -44,7 +44,7 @@ provider "aws" {
   default_tags {
     tags = {
       Environment = "Production"
-      Project     = "AMI Factory"
+      Project     = var.project
       ManagedBy   = "Terraform"
     }
   }

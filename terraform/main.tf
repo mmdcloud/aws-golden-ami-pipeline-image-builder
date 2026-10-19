@@ -211,6 +211,11 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
     }
   }
 
+  instance_metadata_options {
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1
+  }
+
   tags = {
     Name      = "golden-ami-config"
     ManagedBy = "terraform"
@@ -675,20 +680,9 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
   policy_detail {
     action {
       type = "DELETE"
-    }
-    filter {
-      type  = "AGE"
-      value = 180
-      unit  = "DAYS"
-    }
-    # Don't delete if the AMI is still in use
-    exclusion_rules {
-      amis {
-        is_public = false
-        last_launched {
-          value = 90
-          unit  = "DAYS"
-        }
+      include_resources {
+        amis      = true
+        snapshots = true
       }
     }
   }
@@ -727,6 +721,67 @@ module "ami_events_sns" {
   }
 }
 
+module "ami_security_sns" {
+  source     = "./modules/sns"
+  topic_name = "ami-security-alerts"
+
+  subscriptions = [
+    {
+      protocol = "email"
+      endpoint = var.notification_email
+    }
+  ]
+
+  tags = {
+    Name = "ami-security-alerts"
+  }
+}
+
+locals {
+  sns_topics = {
+    builds   = module.ami_events_sns.topic_arn
+    security = module.ami_security_sns.topic_arn
+  }
+}
+
+data "aws_iam_policy_document" "sns_publish" {
+  for_each = local.sns_topics
+
+  statement {
+    sid       = "AllowEventsAndAlarmsPublish"
+    actions   = ["sns:Publish"]
+    resources = [each.value]
+
+    principals {
+      type        = "Service"
+      identifiers = ["events.amazonaws.com", "cloudwatch.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
+
+  statement {
+    sid       = "AllowAccountOwner"
+    actions   = ["sns:*"]
+    resources = [each.value]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
+    }
+  }
+}
+
+resource "aws_sns_topic_policy" "this" {
+  for_each = local.sns_topics
+  arn      = each.value
+  policy   = data.aws_iam_policy_document.sns_publish[each.key].json
+}
+
 # --------------------------------------------------------------------------------
 # EventBridge Rule for AMI Creation Notifications
 # --------------------------------------------------------------------------------
@@ -737,7 +792,7 @@ module "ami_events_rule" {
 
   event_pattern = jsonencode({
     source      = ["aws.imagebuilder"]
-    detail-type = ["Image Builder Image State Change"]
+    detail-type = ["EC2 Image Builder Image State Change"]
     detail = {
       state = {
         status = ["AVAILABLE", "FAILED", "CANCELLED"]
@@ -763,15 +818,8 @@ resource "aws_config_configuration_recorder" "main" {
   role_arn = aws_iam_role.config_role.arn
 
   recording_group {
-    all_supported                 = false
-    include_global_resource_types = false
-    resource_types = [
-      "AWS::EC2::Instance",
-      "AWS::EC2::Volume",
-      "AWS::ImageBuilder::ImagePipeline",
-      "AWS::IAM::Role",
-      "AWS::S3::Bucket",
-    ]
+    all_supported                 = true
+    include_global_resource_types = true
   }
 }
 
@@ -878,28 +926,52 @@ module "config_logs" {
     ]
   })
 
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    },
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
-  versioning_enabled = "Disabled"
-  force_destroy      = true
+  cors               = []
+  versioning_enabled = "Enabled"
+  force_destroy      = var.force_destroy_buckets
 
   tags = {
     Name      = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
     ManagedBy = "terraform"
     Project   = var.project
   }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "audit_logs" {
+  for_each = {
+    cloudtrail = module.cloudtrail_logs.id
+    config     = module.config_logs.id
+  }
+  bucket = each.value
+
+  rule {
+    id     = "expire-old-logs"
+    status = "Enabled"
+    filter {}
+
+    expiration {
+      days = 365
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "all" {
+  for_each = {
+    artifacts  = module.ami_artifacts.id
+    cloudtrail = module.cloudtrail_logs.id
+    config     = module.config_logs.id
+  }
+  bucket                  = each.value
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_iam_role" "config_role" {
@@ -919,6 +991,27 @@ resource "aws_iam_role" "config_role" {
     ManagedBy = "terraform"
     Project   = var.project
   }
+}
+
+resource "aws_iam_role_policy" "config_s3" {
+  name = "config-s3-delivery"
+  role = aws_iam_role.config_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:PutObjectAcl"]
+        Resource = "${module.config_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/Config/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetBucketAcl"]
+        Resource = module.config_logs.arn
+      }
+    ]
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "config_role_policy" {
@@ -1045,23 +1138,10 @@ module "cloudtrail_logs" {
     ]
   })
 
-  cors = [
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["GET"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    },
-    {
-      allowed_headers = ["*"]
-      allowed_methods = ["PUT"]
-      allowed_origins = ["*"]
-      max_age_seconds = 3000
-    }
-  ]
+  cors = []
 
-  versioning_enabled = "Disabled"
-  force_destroy      = true
+  versioning_enabled = "Enabled"
+  force_destroy      = var.force_destroy_buckets
 
   tags = {
     Name      = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
@@ -1238,51 +1318,90 @@ module "pipeline_failures" {
   ok_actions          = [module.ami_events_sns.topic_arn]
 }
 
+resource "aws_cloudwatch_log_metric_filter" "kms_key_usage" {
+  name           = "ami-factory-kms-usage"
+  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+  pattern        = "{ ($.eventSource = \"kms.amazonaws.com\") && ($.eventName = \"Decrypt\" || $.eventName = \"GenerateDataKey\") && ($.resources[0].ARN = \"${module.ami_encryption.arn}\") }"
+
+  metric_transformation {
+    name      = "KMSKeyUsage"
+    namespace = "AMIFactory/KMS"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "kms_access_denied" {
+  name           = "ami-factory-kms-access-denied"
+  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+  pattern        = "{ ($.eventSource = \"kms.amazonaws.com\") && ($.errorCode = \"*AccessDenied*\") }"
+
+  metric_transformation {
+    name      = "KMSAccessDenied"
+    namespace = "AMIFactory/KMS"
+    value     = "1"
+  }
+}
+
 # KMS key usage anomaly — unexpected spikes = possible unauthorized decryption
 module "kms_key_usage_spike" {
   source              = "./modules/cloudwatch/cloudwatch-alarm"
   alarm_name          = "ami-factory-kms-usage-spike"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 2
-  metric_name         = "NumberOfRequestsSucceeded"
-  namespace           = "AWS/KMS"
+  metric_name         = "KMSKeyUsage"
+  namespace           = "AMIFactory/KMS"
   period              = 300
   statistic           = "Sum"
   threshold           = 500
-  alarm_description   = "Unusual KMS Decrypt/GenerateDataKey volume on ami-encryption-key. May indicate unauthorized AMI access or unexpected launch activity in non-production accounts."
+  alarm_description   = "Unusual Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
+  alarm_actions       = [module.ami_events_sns.topic_arn] # see section 6
+  ok_actions          = [module.ami_events_sns.topic_arn]
+}
+
+module "kms_access_denied" {
+  source              = "./modules/cloudwatch/cloudwatch-alarm"
+  alarm_name          = "ami-factory-kms-access-denied"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "KMSAccessDenied"
+  namespace           = "AMIFactory/KMS"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "KMS AccessDenied seen in CloudTrail. Usually a missing key-policy statement for a build/launch role."
   alarm_actions       = [module.ami_events_sns.topic_arn]
   ok_actions          = [module.ami_events_sns.topic_arn]
-
-  dimensions = {
-    KeyId = module.ami_encryption.key_id
-  }
 }
 
 # S3 artifacts bucket — 4XX errors = broken component download during builds
-module "ami_artifacts_s3_4xx" {
-  source              = "./modules/cloudwatch/cloudwatch-alarm"
-  alarm_name          = "ami-factory-artifacts-4xx"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
-  metric_name         = "4xxErrors"
-  namespace           = "AWS/S3"
-  period              = 300
-  statistic           = "Sum"
-  threshold           = 5
-  alarm_description   = "S3 4XX errors on ami-artifacts bucket. Image Builder component downloads may be failing. Check bucket policy and IAM role permissions on ec2-image-builder-role."
-  alarm_actions       = [module.ami_events_sns.topic_arn]
-  ok_actions          = [module.ami_events_sns.topic_arn]
+# module "ami_artifacts_s3_4xx" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "ami-factory-artifacts-4xx"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 1
+#   metric_name         = "4xxErrors"
+#   namespace           = "AWS/S3"
+#   period              = 300
+#   statistic           = "Sum"
+#   threshold           = 5
+#   alarm_description   = "S3 4XX errors on ami-artifacts bucket. Image Builder component downloads may be failing. Check bucket policy and IAM role permissions on ec2-image-builder-role."
+#   alarm_actions       = [module.ami_events_sns.topic_arn]
+#   ok_actions          = [module.ami_events_sns.topic_arn]
 
-  dimensions = {
-    BucketName = module.ami_artifacts.id
-    FilterId   = "EntireBucket"
-  }
-}
+#   dimensions = {
+#     BucketName = module.ami_artifacts.id
+#     FilterId   = "EntireBucket"
+#   }
+# }
 
 # ---------------------------------------------------------------------------------
 # SECURITY HUB — Aggregate Config, Inspector, CloudTrail findings in one place
 # ---------------------------------------------------------------------------------
-resource "aws_securityhub_account" "main" {}
+resource "aws_securityhub_account" "main" {
+  enable_default_standards = false
+  auto_enable_controls     = true
+  depends_on               = [aws_config_configuration_recorder_status.main]
+}
 
 resource "aws_securityhub_standards_subscription" "cis" {
   standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/cis-aws-foundations-benchmark/v/3.0.0"
