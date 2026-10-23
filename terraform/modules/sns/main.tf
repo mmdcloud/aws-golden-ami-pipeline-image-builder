@@ -1,23 +1,23 @@
-# SNS-EventBridge Topic Policy
-data "aws_iam_policy_document" "sns_topic_policy_document" {
-  statement {
-    effect  = "Allow"
-    actions = ["SNS:Publish"]
-    principals {
-      type = "Service"
-      identifiers = [
-        "events.amazonaws.com",
-        "cloudwatch.amazonaws.com"
-      ]
-    }
-    resources = [aws_sns_topic.topic.arn]
-  }
-}
+# # SNS-EventBridge Topic Policy
+# data "aws_iam_policy_document" "sns_topic_policy_document" {
+#   statement {
+#     effect  = "Allow"
+#     actions = ["SNS:Publish"]
+#     principals {
+#       type = "Service"
+#       identifiers = [
+#         "events.amazonaws.com",
+#         "cloudwatch.amazonaws.com"
+#       ]
+#     }
+#     resources = [aws_sns_topic.topic.arn]
+#   }
+# }
 
-resource "aws_sns_topic_policy" "sns_topic_policy" {
-  arn    = aws_sns_topic.topic.arn
-  policy = data.aws_iam_policy_document.sns_topic_policy_document.json
-}
+# resource "aws_sns_topic_policy" "sns_topic_policy" {
+#   arn    = aws_sns_topic.topic.arn
+#   policy = data.aws_iam_policy_document.sns_topic_policy_document.json
+# }
 
 # SNS Topic for notifying users about the state changes in MediaConvert Job
 resource "aws_sns_topic" "topic" {

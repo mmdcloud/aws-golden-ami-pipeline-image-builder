@@ -66,13 +66,6 @@ output "artifacts_bucket_arn" {
   value       = module.ami_artifacts.arn
 }
 
-# ── Notifications ─────────────────────────────────────────────────────────────
-
-output "sns_topic_arn" {
-  description = "ARN of the SNS topic for AMI pipeline events, Inspector findings, and Security Hub alerts. Subscribe additional endpoints here."
-  value       = module.ami_events_sns.topic_arn
-}
-
 # ── Compliance ────────────────────────────────────────────────────────────────
 
 output "config_recorder_id_primary" {
@@ -83,4 +76,14 @@ output "config_recorder_id_primary" {
 output "cloudtrail_arn" {
   description = "ARN of the multi-region CloudTrail trail."
   value       = aws_cloudtrail.ami_factory.arn
+}
+
+output "sns_topic_arn" {
+  description = "ARN of the SNS topic for AMI build results and pipeline failures. Subscribe additional endpoints here."
+  value       = module.ami_events_sns.topic_arn
+}
+
+output "security_sns_topic_arn" {
+  description = "ARN of the SNS topic for Inspector, Security Hub and KMS security alerts."
+  value       = module.ami_security_sns.topic_arn
 }

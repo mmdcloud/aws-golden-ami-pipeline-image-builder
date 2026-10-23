@@ -329,10 +329,6 @@ resource "aws_kms_key_policy" "ami_encryption" {
           }
         }
       },
-
-      # ── 4. Image Builder IAM role (EBS encryption + S3 artifact uploads) ─────
-      # Mirrors the inline policy on aws_iam_role_policy.image_builder_kms but
-      # the key policy must also permit these actions for them to succeed.
       {
         Sid    = "AllowImageBuilderRole"
         Effect = "Allow"
@@ -1250,7 +1246,7 @@ module "ami_factory_inspector_events_rule" {
     source      = ["aws.inspector2"]
     detail-type = ["Inspector2 Finding"]
     detail = {
-      severity = ["CRITICAL", "HIGH"]
+      severity = ["CRITICAL"]
       status   = ["ACTIVE"]
       resources = {
         type = ["AWS_EC2_INSTANCE"]
@@ -1389,7 +1385,7 @@ module "kms_key_usage_spike" {
   statistic           = "Sum"
   threshold           = 500
   alarm_description   = "Unusual Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
-  alarm_actions       = [module.ami_security_sns.topic_arn] # see section 6
+  alarm_actions       = [module.ami_security_sns.topic_arn]
   ok_actions          = [module.ami_security_sns.topic_arn]
 }
 
