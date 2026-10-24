@@ -93,7 +93,7 @@ variable "existing_subnet_id" {
 }
 
 variable "force_destroy_buckets" {
-  description = "Allow terraform destroy to delete non-empty log buckets. Keep false outside throwaway accounts."
+  description = "Allow terraform destroy to delete non-empty log buckets. Set to true to allow clean teardown."
   type        = bool
-  default     = false
+  default     = true
 }
