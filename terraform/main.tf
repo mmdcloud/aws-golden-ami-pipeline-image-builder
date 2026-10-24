@@ -293,7 +293,10 @@ resource "aws_kms_key_policy" "ami_encryption" {
         Sid    = "AllowCloudWatchLogs"
         Effect = "Allow"
         Principal = {
-          Service = "logs.${var.primary_region}.amazonaws.com"
+          Service = [
+            "logs.${var.primary_region}.amazonaws.com",
+            "logs.amazonaws.com"
+          ]
         }
         Action = [
           "kms:Encrypt*",
@@ -305,7 +308,10 @@ resource "aws_kms_key_policy" "ami_encryption" {
         Resource = "*"
         Condition = {
           ArnLike = {
-            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:*"
+            "kms:EncryptionContext:aws:logs:arn" = [
+              "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:log-group:*",
+              "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:*"
+            ]
           }
         }
       },
@@ -783,8 +789,18 @@ data "aws_iam_policy_document" "sns_publish" {
   }
 
   statement {
-    sid       = "AllowAccountOwner"
-    actions   = ["sns:*"]
+    sid = "AllowAccountOwner"
+    actions = [
+      "SNS:GetTopicAttributes",
+      "SNS:SetTopicAttributes",
+      "SNS:AddPermission",
+      "SNS:RemovePermission",
+      "SNS:DeleteTopic",
+      "SNS:Subscribe",
+      "SNS:ListSubscriptionsByTopic",
+      "SNS:Publish",
+      "SNS:Receive"
+    ]
     resources = [each.value]
 
     principals {
@@ -1119,7 +1135,7 @@ resource "aws_cloudwatch_log_group" "cloudtrail" {
     Project   = var.project
   }
 
-  depends_on = [module.ami_encryption]
+  depends_on = [aws_kms_key_policy.ami_encryption]
 }
 
 module "cloudtrail_logs" {
@@ -1278,7 +1294,7 @@ resource "aws_cloudwatch_log_group" "image_builder" {
     Project   = var.project
   }
 
-  depends_on = [module.ami_encryption]
+  depends_on = [aws_kms_key_policy.ami_encryption]
 }
 
 # Metric filter: count pipeline FAILED events from EventBridge logs
