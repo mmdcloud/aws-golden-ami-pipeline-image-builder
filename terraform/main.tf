@@ -221,6 +221,11 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
     ManagedBy = "terraform"
     Project   = var.project
   }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.image_builder_policy_attachment,
+    aws_iam_role_policy_attachment.ssm
+  ]
 }
 
 # --------------------------------------------------------------------------------
@@ -650,8 +655,11 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   enhanced_image_metadata_enabled = true
   status                          = "ENABLED"
 
-  image_scanning_configuration {
-    image_scanning_enabled = true
+  dynamic "image_scanning_configuration" {
+    for_each = var.enable_inspector ? [1] : []
+    content {
+      image_scanning_enabled = true
+    }
   }
 
   image_tests_configuration {
@@ -664,6 +672,10 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
     ManagedBy = "terraform"
     Project   = var.project
   }
+
+  depends_on = [
+    aws_inspector2_enabler.ami_factory
+  ]
 }
 
 # --------------------------------------------------------------------------------
@@ -722,6 +734,10 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
     ManagedBy = "terraform"
     Project   = var.project
   }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lifecycle_policy
+  ]
 }
 
 # --------------------------------------------------------------------------------
@@ -798,8 +814,7 @@ data "aws_iam_policy_document" "sns_publish" {
       "SNS:DeleteTopic",
       "SNS:Subscribe",
       "SNS:ListSubscriptionsByTopic",
-      "SNS:Publish",
-      "SNS:Receive"
+      "SNS:Publish"
     ]
     resources = [each.value]
 
@@ -1248,12 +1263,14 @@ module "cloudtrail_cw_role" {
 # INSPECTOR V2 — Continuous vulnerability scanning on build instances
 # ---------------------------------------------------------------------------------
 resource "aws_inspector2_enabler" "ami_factory" {
+  count          = var.enable_inspector ? 1 : 0
   account_ids    = [data.aws_caller_identity.current.account_id]
   resource_types = ["EC2"]
 }
 
 # SNS alert when Inspector finds a CRITICAL finding
 module "ami_factory_inspector_events_rule" {
+  count       = var.enable_inspector ? 1 : 0
   source      = "./modules/eventbridge"
   rule_name   = "ami-factory-inspector-critical"
   description = "Alert on Inspector CRITICAL findings during AMI builds"
@@ -1432,11 +1449,21 @@ resource "aws_securityhub_account" "main" {
 resource "aws_securityhub_standards_subscription" "cis" {
   standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/cis-aws-foundations-benchmark/v/3.0.0"
   depends_on    = [aws_securityhub_account.main]
+
+  timeouts {
+    create = "20m"
+    delete = "20m"
+  }
 }
 
 resource "aws_securityhub_standards_subscription" "aws_foundational" {
   standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/aws-foundational-security-best-practices/v/1.0.0"
   depends_on    = [aws_securityhub_account.main]
+
+  timeouts {
+    create = "20m"
+    delete = "20m"
+  }
 }
 
 # Route CRITICAL Security Hub findings to SNS

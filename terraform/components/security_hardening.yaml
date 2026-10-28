@@ -180,8 +180,9 @@ phases:
             - freshclam || echo "freshclam initial download skipped or throttled, will update on runtime"
             - rkhunter --update
             - rkhunter --propupd
-            - aide --config /etc/aide/aide.conf --init
-            - mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+            - (aide --config /etc/aide/aide.conf --init 2>/dev/null || aideinit 2>/dev/null || true)
+            - ([ -f /var/lib/aide/aide.db.new ] && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db || true)
+            - ([ -f /var/lib/aide/aide.db.new.gz ] && mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz || true)
 
       - name: DisableUSB
         action: ExecuteBash

@@ -97,3 +97,9 @@ variable "force_destroy_buckets" {
   type        = bool
   default     = true
 }
+
+variable "enable_inspector" {
+  description = "Whether Amazon Inspector v2 is enabled for EC2 vulnerability scanning in this account. Set to false if Inspector is not active in this account/organization to avoid ResourceDependencyException in Image Builder."
+  type        = bool
+  default     = false
+}
