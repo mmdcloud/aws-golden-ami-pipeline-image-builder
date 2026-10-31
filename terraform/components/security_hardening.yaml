@@ -240,6 +240,8 @@ phases:
             - find /home -name ".bash_history" -exec rm -f {} \;
             - rm -rf /tmp/* /var/tmp/*
             - rm -f /etc/ssh/ssh_host_*
+            - truncate -s 0 /etc/machine-id
+            - rm -f /var/lib/dbus/machine-id
             - cloud-init clean --logs 2>/dev/null || true
 
   - name: validate

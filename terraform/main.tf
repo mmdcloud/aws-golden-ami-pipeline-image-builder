@@ -279,121 +279,140 @@ resource "aws_kms_key_policy" "ami_encryption" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat(
+      [
 
-      # ── 1. Root account retains full administrative control ──────────────────
-      {
-        Sid    = "EnableRootAdminAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
-        }
-        Action   = "kms:*"
-        Resource = "*"
-      },
+        # ── 1. Root account retains full administrative control ──────────────────
+        {
+          Sid    = "EnableRootAdminAccess"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          }
+          Action   = "kms:*"
+          Resource = "*"
+        },
 
-      # ── 2. CloudWatch Logs (log group encryption) ────────────────────────────
-      # Required by: /aws/cloudtrail/ami-factory  and  /aws/imagebuilder/ami-factory
-      {
-        Sid    = "AllowCloudWatchLogs"
-        Effect = "Allow"
-        Principal = {
-          Service = [
-            "logs.${var.primary_region}.amazonaws.com",
-            "logs.amazonaws.com"
-          ]
-        }
-        Action = [
-          "kms:Encrypt*",
-          "kms:Decrypt*",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:Describe*"
-        ]
-        Resource = "*"
-        Condition = {
-          ArnLike = {
-            "kms:EncryptionContext:aws:logs:arn" = [
-              "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:log-group:*",
-              "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:*"
+        # ── 2. CloudWatch Logs (log group encryption) ────────────────────────────
+        # Required by: /aws/cloudtrail/ami-factory  and  /aws/imagebuilder/ami-factory
+        {
+          Sid    = "AllowCloudWatchLogs"
+          Effect = "Allow"
+          Principal = {
+            Service = [
+              "logs.${var.primary_region}.amazonaws.com",
+              "logs.amazonaws.com"
             ]
           }
-        }
-      },
-
-      # ── 3. CloudTrail (trail log encryption) ─────────────────────────────────
-      # Required by: aws_cloudtrail.ami_factory
-      {
-        Sid    = "AllowCloudTrailEncrypt"
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudtrail.amazonaws.com"
-        }
-        Action = [
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey"
-        ]
-        Resource = "*"
-        Condition = {
-          StringLike = {
-            "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"
+          Action = [
+            "kms:Encrypt*",
+            "kms:Decrypt*",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:Describe*"
+          ]
+          Resource = "*"
+          Condition = {
+            ArnLike = {
+              "kms:EncryptionContext:aws:logs:arn" = [
+                "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:log-group:*",
+                "arn:aws:logs:${var.primary_region}:${data.aws_caller_identity.current.account_id}:*"
+              ]
+            }
           }
-        }
-      },
-      {
-        Sid    = "AllowImageBuilderRole"
-        Effect = "Allow"
-        Principal = {
-          AWS = module.image_builder_role.arn
-        }
-        Action = [
-          "kms:GenerateDataKey",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:DescribeKey",
-          "kms:CreateGrant"
-        ]
-        Resource = "*"
-      },
+        },
 
-      # ── 5. Image Builder Service & Service-Linked Role ───────────────────────
-      {
-        Sid    = "AllowImageBuilderService"
-        Effect = "Allow"
-        Principal = {
-          Service = "imagebuilder.amazonaws.com"
+        # ── 3. CloudTrail (trail log encryption) ─────────────────────────────────
+        # Required by: aws_cloudtrail.ami_factory
+        {
+          Sid    = "AllowCloudTrailEncrypt"
+          Effect = "Allow"
+          Principal = {
+            Service = "cloudtrail.amazonaws.com"
+          }
+          Action = [
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey"
+          ]
+          Resource = "*"
+          Condition = {
+            StringLike = {
+              "kms:EncryptionContext:aws:cloudtrail:arn" = "arn:aws:cloudtrail:*:${data.aws_caller_identity.current.account_id}:trail/*"
+            }
+          }
+        },
+        {
+          Sid    = "AllowImageBuilderRole"
+          Effect = "Allow"
+          Principal = {
+            AWS = module.image_builder_role.arn
+          }
+          Action = [
+            "kms:GenerateDataKey",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:DescribeKey",
+            "kms:CreateGrant"
+          ]
+          Resource = "*"
+        },
+
+        # ── 5. Image Builder Service & Service-Linked Role ───────────────────────
+        {
+          Sid    = "AllowImageBuilderService"
+          Effect = "Allow"
+          Principal = {
+            Service = "imagebuilder.amazonaws.com"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "AllowAWSServiceRoleForImageBuilder"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
         }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowAWSServiceRoleForImageBuilder"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+      ],
+      length(var.shared_account_ids) > 0 ? [
+        {
+          Sid    = "AllowSharedAccountsLaunch"
+          Effect = "Allow"
+          Principal = {
+            AWS = [for acc in var.shared_account_ids : "arn:aws:iam::${acc}:root"]
+          }
+          Action = [
+            "kms:DescribeKey",
+            "kms:GenerateDataKeyWithoutPlaintext",
+            "kms:CreateGrant",
+            "kms:ReEncrypt*",
+            "kms:Decrypt"
+          ]
+          Resource = "*"
         }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      }
-    ]
+      ] : []
+    )
   })
 }
 
@@ -403,53 +422,72 @@ resource "aws_kms_key_policy" "ami_encryption_eu_west" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAdminAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+    Statement = concat(
+      [
+        {
+          Sid    = "EnableRootAdminAccess"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          }
+          Action   = "kms:*"
+          Resource = "*"
+        },
+        {
+          Sid    = "AllowImageBuilderService"
+          Effect = "Allow"
+          Principal = {
+            Service = "imagebuilder.amazonaws.com"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "AllowAWSServiceRoleForImageBuilder"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
         }
-        Action   = "kms:*"
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowImageBuilderService"
-        Effect = "Allow"
-        Principal = {
-          Service = "imagebuilder.amazonaws.com"
+      ],
+      length(var.shared_account_ids) > 0 ? [
+        {
+          Sid    = "AllowSharedAccountsLaunch"
+          Effect = "Allow"
+          Principal = {
+            AWS = [for acc in var.shared_account_ids : "arn:aws:iam::${acc}:root"]
+          }
+          Action = [
+            "kms:DescribeKey",
+            "kms:GenerateDataKeyWithoutPlaintext",
+            "kms:CreateGrant",
+            "kms:ReEncrypt*",
+            "kms:Decrypt"
+          ]
+          Resource = "*"
         }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowAWSServiceRoleForImageBuilder"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
-        }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      }
-    ]
+      ] : []
+    )
   })
 }
 
@@ -459,53 +497,72 @@ resource "aws_kms_key_policy" "ami_encryption_ap_southeast" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EnableRootAdminAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+    Statement = concat(
+      [
+        {
+          Sid    = "EnableRootAdminAccess"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          }
+          Action   = "kms:*"
+          Resource = "*"
+        },
+        {
+          Sid    = "AllowImageBuilderService"
+          Effect = "Allow"
+          Principal = {
+            Service = "imagebuilder.amazonaws.com"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
+        },
+        {
+          Sid    = "AllowAWSServiceRoleForImageBuilder"
+          Effect = "Allow"
+          Principal = {
+            AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
+          }
+          Action = [
+            "kms:Encrypt",
+            "kms:Decrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+            "kms:DescribeKey",
+            "kms:CreateGrant",
+            "kms:ListGrants",
+            "kms:RevokeGrant"
+          ]
+          Resource = "*"
         }
-        Action   = "kms:*"
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowImageBuilderService"
-        Effect = "Allow"
-        Principal = {
-          Service = "imagebuilder.amazonaws.com"
+      ],
+      length(var.shared_account_ids) > 0 ? [
+        {
+          Sid    = "AllowSharedAccountsLaunch"
+          Effect = "Allow"
+          Principal = {
+            AWS = [for acc in var.shared_account_ids : "arn:aws:iam::${acc}:root"]
+          }
+          Action = [
+            "kms:DescribeKey",
+            "kms:GenerateDataKeyWithoutPlaintext",
+            "kms:CreateGrant",
+            "kms:ReEncrypt*",
+            "kms:Decrypt"
+          ]
+          Resource = "*"
         }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "AllowAWSServiceRoleForImageBuilder"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/imagebuilder.amazonaws.com/AWSServiceRoleForImageBuilder"
-        }
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey",
-          "kms:CreateGrant",
-          "kms:ListGrants",
-          "kms:RevokeGrant"
-        ]
-        Resource = "*"
-      }
-    ]
+      ] : []
+    )
   })
 }
 
@@ -589,7 +646,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
         ManagedBy   = "terraform"
       }
       launch_permission {
-        user_ids = [data.aws_caller_identity.current.account_id]
+        user_ids = distinct(concat([data.aws_caller_identity.current.account_id], var.shared_account_ids))
       }
     }
   }
@@ -607,7 +664,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
         ManagedBy   = "terraform"
       }
       launch_permission {
-        user_ids = [data.aws_caller_identity.current.account_id]
+        user_ids = distinct(concat([data.aws_caller_identity.current.account_id], var.shared_account_ids))
       }
     }
   }
@@ -625,7 +682,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
         ManagedBy   = "terraform"
       }
       launch_permission {
-        user_ids = [data.aws_caller_identity.current.account_id]
+        user_ids = distinct(concat([data.aws_caller_identity.current.account_id], var.shared_account_ids))
       }
     }
   }
@@ -1440,62 +1497,62 @@ module "kms_access_denied" {
 # ---------------------------------------------------------------------------------
 # SECURITY HUB — Aggregate Config, Inspector, CloudTrail findings in one place
 # ---------------------------------------------------------------------------------
-resource "aws_securityhub_account" "main" {
-  count                    = var.enable_security_hub ? 1 : 0
-  enable_default_standards = false
-  auto_enable_controls     = true
-  depends_on               = [aws_config_configuration_recorder_status.main]
-}
+# resource "aws_securityhub_account" "main" {
+#   count                    = var.enable_security_hub ? 1 : 0
+#   enable_default_standards = false
+#   auto_enable_controls     = true
+#   depends_on               = [aws_config_configuration_recorder_status.main]
+# }
 
-resource "aws_securityhub_standards_subscription" "cis" {
-  count         = var.enable_security_hub ? 1 : 0
-  standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/cis-aws-foundations-benchmark/v/3.0.0"
-  depends_on    = [aws_securityhub_account.main]
+# resource "aws_securityhub_standards_subscription" "cis" {
+#   count         = var.enable_security_hub ? 1 : 0
+#   standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/cis-aws-foundations-benchmark/v/3.0.0"
+#   depends_on    = [aws_securityhub_account.main]
 
-  timeouts {
-    create = "20m"
-    delete = "20m"
-  }
-}
+#   timeouts {
+#     create = "20m"
+#     delete = "20m"
+#   }
+# }
 
-resource "aws_securityhub_standards_subscription" "aws_foundational" {
-  count         = var.enable_security_hub ? 1 : 0
-  standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/aws-foundational-security-best-practices/v/1.0.0"
-  depends_on    = [aws_securityhub_account.main]
+# resource "aws_securityhub_standards_subscription" "aws_foundational" {
+#   count         = var.enable_security_hub ? 1 : 0
+#   standards_arn = "arn:aws:securityhub:${var.primary_region}::standards/aws-foundational-security-best-practices/v/1.0.0"
+#   depends_on    = [aws_securityhub_account.main]
 
-  timeouts {
-    create = "20m"
-    delete = "20m"
-  }
-}
+#   timeouts {
+#     create = "20m"
+#     delete = "20m"
+#   }
+# }
 
-# Route CRITICAL Security Hub findings to SNS
-module "securityhub_critical" {
-  count       = var.enable_security_hub ? 1 : 0
-  source      = "./modules/eventbridge"
-  rule_name   = "securityhub-critical-event"
-  description = "Capture Security Hub events"
+# # Route CRITICAL Security Hub findings to SNS
+# module "securityhub_critical" {
+#   count       = var.enable_security_hub ? 1 : 0
+#   source      = "./modules/eventbridge"
+#   rule_name   = "securityhub-critical-event"
+#   description = "Capture Security Hub events"
 
-  event_pattern = jsonencode({
-    source      = ["aws.securityhub"]
-    detail-type = ["Security Hub Findings - Imported"]
-    detail = {
-      findings = {
-        Severity = {
-          Label = ["CRITICAL", "HIGH"]
-        }
-        RecordState   = ["ACTIVE"]
-        WorkflowState = ["NEW"]
-      }
-    }
-  })
+#   event_pattern = jsonencode({
+#     source      = ["aws.securityhub"]
+#     detail-type = ["Security Hub Findings - Imported"]
+#     detail = {
+#       findings = {
+#         Severity = {
+#           Label = ["CRITICAL", "HIGH"]
+#         }
+#         RecordState   = ["ACTIVE"]
+#         WorkflowState = ["NEW"]
+#       }
+#     }
+#   })
 
-  target_id  = "SecurityHubCriticalToSNS"
-  target_arn = module.ami_security_sns.topic_arn
+#   target_id  = "SecurityHubCriticalToSNS"
+#   target_arn = module.ami_security_sns.topic_arn
 
-  tags = {
-    Name      = "securityhub-critical-event"
-    ManagedBy = "terraform"
-    Project   = var.project
-  }
-}
+#   tags = {
+#     Name      = "securityhub-critical-event"
+#     ManagedBy = "terraform"
+#     Project   = var.project
+#   }
+# }

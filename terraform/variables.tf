@@ -110,3 +110,10 @@ variable "enable_security_hub" {
   default     = false
 }
 
+variable "shared_account_ids" {
+  description = "List of external AWS account IDs to share the distributed Golden AMIs with. Defaults to empty (current account only)."
+  type        = list(string)
+  default     = []
+}
+
+
