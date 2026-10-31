@@ -8,4 +8,6 @@ recipe_version        = "1.0.0"
 create_vpc            = false # Set to false to use default/existing VPC (bypasses SCP deny on ec2:CreateVpc)
 force_destroy_buckets = true
 enable_inspector      = false # Set to true if Amazon Inspector EC2 scanning is active in this account/organization
+enable_security_hub   = false # Set to true if Security Hub standards should be subscribed (includes 20m timeout)
+
 

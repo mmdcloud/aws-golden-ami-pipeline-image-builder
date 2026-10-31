@@ -103,3 +103,10 @@ variable "enable_inspector" {
   type        = bool
   default     = false
 }
+
+variable "enable_security_hub" {
+  description = "Whether to enable AWS Security Hub account standards subscriptions and alerts. Set to false if Security Hub standards should not be managed or time out."
+  type        = bool
+  default     = false
+}
+

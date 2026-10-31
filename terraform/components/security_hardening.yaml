@@ -21,7 +21,6 @@ phases:
           commands:
             - |
               cat > /etc/ssh/sshd_config.d/99-hardening.conf << 'SSHD'
-              Protocol 2
               PermitRootLogin no
               PasswordAuthentication no
               PermitEmptyPasswords no
@@ -90,16 +89,25 @@ phases:
             - sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   14/'  /etc/login.defs
             - sed -i 's/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/' /etc/login.defs
             - |
-              if grep -q 'pam_pwquality' /etc/pam.d/common-password; then
-                sed -i 's/.*pam_pwquality.so.*/password requisite pam_pwquality.so retry=3 minlen=14 dcredit=-1 ucredit=-1 ocredit=-1 lcredit=-1 maxrepeat=3 reject_username enforce_for_root/' /etc/pam.d/common-password
-              else
-                sed -i '/pam_unix.so/i password requisite pam_pwquality.so retry=3 minlen=14 dcredit=-1 ucredit=-1 ocredit=-1 lcredit=-1 maxrepeat=3 reject_username enforce_for_root' /etc/pam.d/common-password
-              fi
+              cat > /etc/security/pwquality.conf << 'PWQ'
+              minlen = 14
+              dcredit = -1
+              ucredit = -1
+              ocredit = -1
+              lcredit = -1
+              maxrepeat = 3
+              retry = 3
+              enforce_for_root
+              reject_username
+              PWQ
             - |
-              if ! grep -q 'pam_faillock' /etc/pam.d/common-auth; then
-                sed -i '/pam_unix.so/i auth required pam_faillock.so preauth silent audit deny=5 unlock_time=900' /etc/pam.d/common-auth
-                sed -i '/pam_unix.so/a auth [default=die] pam_faillock.so authfail audit deny=5 unlock_time=900' /etc/pam.d/common-auth
-              fi
+              cat > /etc/security/faillock.conf << 'FAIL'
+              deny = 5
+              unlock_time = 900
+              audit
+              silent
+              FAIL
+            - pam-auth-update --enable faillock 2>/dev/null || true
             - useradd -D -f 30
 
       - name: DisableServices
@@ -129,7 +137,7 @@ phases:
         action: ExecuteBash
         inputs:
           commands:
-            - apt-get install -y auditd audispd-plugins 2>/dev/null || apt-get install -y auditd
+            - apt-get install -y auditd
             - systemctl enable auditd
             - |
               cat > /etc/audit/rules.d/99-hardening.rules << 'AUDIT'
@@ -169,7 +177,7 @@ phases:
               -w /etc/apparmor/       -p wa -k apparmor
               -w /etc/apparmor.d/     -p wa -k apparmor
               AUDIT
-            - augenrules --load 2>/dev/null || service auditd restart 2>/dev/null || true
+            - augenrules --load 2>/dev/null || systemctl restart auditd 2>/dev/null || true
 
       - name: InstallSecurityTools
         action: ExecuteBash
@@ -202,8 +210,8 @@ phases:
             - chmod 700 /root
             - chmod 600 /etc/crontab
             - chmod 700 /etc/cron.d /etc/cron.daily /etc/cron.hourly /etc/cron.weekly /etc/cron.monthly
-            - chmod 640 /var/log/syslog  2>/dev/null || true
-            - chmod 640 /var/log/auth.log 2>/dev/null || true
+            - ([ -f /var/log/syslog ] && chmod 640 /var/log/syslog || true)
+            - ([ -f /var/log/auth.log ] && chmod 640 /var/log/auth.log || true)
 
       - name: SetLoginBanner
         action: ExecuteBash
