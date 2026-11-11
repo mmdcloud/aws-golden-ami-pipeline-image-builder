@@ -639,7 +639,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
       kms_key_id = module.ami_encryption.arn # us-east-1 primary key
       ami_tags = {
-        SourceAMI   = "{{ imagebuilder:sourceImage }}"
+        SourceAMI   = "ubuntu-server-24-lts-x86"
         BuildDate   = "{{ imagebuilder:buildDate }}"
         Environment = "production"
         Project     = var.project
@@ -657,7 +657,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
       kms_key_id = aws_kms_replica_key.ami_encryption_eu_west.arn # eu-west-1 replica key
       ami_tags = {
-        SourceAMI   = "{{ imagebuilder:sourceImage }}"
+        SourceAMI   = "ubuntu-server-24-lts-x86"
         BuildDate   = "{{ imagebuilder:buildDate }}"
         Environment = "production"
         Project     = var.project
@@ -675,7 +675,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
       name       = "golden-ami-{{ imagebuilder:buildDate }}"
       kms_key_id = aws_kms_replica_key.ami_encryption_ap_southeast.arn # ap-southeast-1 replica key
       ami_tags = {
-        SourceAMI   = "{{ imagebuilder:sourceImage }}"
+        SourceAMI   = "ubuntu-server-24-lts-x86"
         BuildDate   = "{{ imagebuilder:buildDate }}"
         Environment = "production"
         Project     = var.project
