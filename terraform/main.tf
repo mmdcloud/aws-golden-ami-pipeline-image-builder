@@ -6,23 +6,47 @@ data "aws_caller_identity" "current" {}
 # -----------------------------------------------------------------------------------------
 # VPC Configuration (Conditional creation to handle SCP restrictions on ec2:CreateVpc)
 # -----------------------------------------------------------------------------------------
+data "aws_subnet" "existing" {
+  count = !var.create_vpc && var.existing_subnet_id != null ? 1 : 0
+  id    = var.existing_subnet_id
+
+  lifecycle {
+    postcondition {
+      condition     = var.existing_vpc_id == null || self.vpc_id == var.existing_vpc_id
+      error_message = "existing_subnet_id is not in existing_vpc_id."
+    }
+  }
+}
+
 data "aws_vpc" "default" {
-  count   = var.create_vpc ? 0 : (var.existing_vpc_id == null ? 1 : 0)
+  count   = !var.create_vpc && var.existing_subnet_id == null && var.existing_vpc_id == null ? 1 : 0
   default = true
 }
 
+locals {
+  vpc_id = (
+    var.create_vpc ? module.image_builder_vpc[0].vpc_id :
+    var.existing_subnet_id != null ? data.aws_subnet.existing[0].vpc_id :
+    var.existing_vpc_id != null ? var.existing_vpc_id :
+    data.aws_vpc.default[0].id
+  )
+  cloudtrail_bucket = "cloudtrail-ami-factory-${data.aws_caller_identity.current.account_id}"
+  config_bucket     = "aws-config-ami-factory-${data.aws_caller_identity.current.account_id}"
+}
+
 data "aws_subnets" "default" {
-  count = var.create_vpc ? 0 : (var.existing_subnet_id == null ? 1 : 0)
+  count = var.create_vpc || var.existing_subnet_id != null ? 0 : 1
   filter {
     name   = "vpc-id"
-    values = [var.existing_vpc_id != null ? var.existing_vpc_id : data.aws_vpc.default[0].id]
+    values = [local.vpc_id]
   }
 }
 
 locals {
-  vpc_id = var.create_vpc ? module.image_builder_vpc[0].vpc_id : (var.existing_vpc_id != null ? var.existing_vpc_id : data.aws_vpc.default[0].id)
-  build_subnet_id = var.create_vpc ? module.image_builder_vpc[0].private_subnets[0] : (
-    var.existing_subnet_id != null ? var.existing_subnet_id : sort(data.aws_subnets.default[0].ids)[0]
+  build_subnet_id = (
+    var.create_vpc ? module.image_builder_vpc[0].private_subnets[0] :
+    var.existing_subnet_id != null ? var.existing_subnet_id :
+    sort(data.aws_subnets.default[0].ids)[0]
   )
 }
 
@@ -214,6 +238,10 @@ resource "aws_imagebuilder_infrastructure_configuration" "golden_ami" {
   instance_metadata_options {
     http_tokens                 = "required"
     http_put_response_hop_limit = 1
+  }
+
+  resource_tags = {
+    Purpose = "ami-factory-build"
   }
 
   tags = {
@@ -567,9 +595,11 @@ resource "aws_kms_key_policy" "ami_encryption_ap_southeast" {
 }
 
 resource "aws_imagebuilder_image_recipe" "base_linux" {
-  name         = "base-linux-recipe-${local.hardening_hash}"
+  for_each = var.releases
+
+  name         = "base-linux-recipe"
   parent_image = "arn:aws:imagebuilder:${var.primary_region}:aws:image/ubuntu-server-24-lts-x86/x.x.x"
-  version      = var.recipe_version
+  version      = each.key
 
   block_device_mapping {
     device_name = "/dev/sda1"
@@ -591,15 +621,11 @@ resource "aws_imagebuilder_image_recipe" "base_linux" {
   }
 
   component {
-    component_arn = aws_imagebuilder_component.security_hardening.arn
-  }
-
-  lifecycle {
-    create_before_destroy = true
+    component_arn = aws_imagebuilder_component.security_hardening[each.key].arn
   }
 
   tags = {
-    Name      = "base-linux-recipe-${local.hardening_hash}"
+    Name      = "base-linux-recipe-${each.key}"
     ManagedBy = "terraform"
     Project   = var.project
   }
@@ -613,19 +639,20 @@ locals {
 }
 
 resource "aws_imagebuilder_component" "security_hardening" {
-  name     = "security-hardening-${local.hardening_hash}"
-  platform = "Linux"
-  version  = "1.0.0"
-  data     = file("${path.module}/components/security_hardening.yaml")
+  for_each = var.releases
 
-  lifecycle {
-    create_before_destroy = true
-  }
+  name     = "security-hardening"
+  platform = "Linux"
+  version  = each.key
+  data     = file("${path.module}/${each.value.component_file}")
 
   tags = {
-    Name = "security-hardening-${local.hardening_hash}"
+    Name      = "security-hardening-${each.key}"
+    ManagedBy = "terraform"
+    Project   = var.project
   }
 }
+
 
 # --------------------------------------------------------------------------------
 # Distribution Settings
@@ -740,7 +767,7 @@ resource "aws_imagebuilder_image_pipeline" "golden_ami" {
 # --------------------------------------------------------------------------------
 resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
   name           = "golden-ami-lifecycle"
-  description    = "Deprecate AMIs older than 90 days, delete after 180"
+  description    = "Deprecate AMIs older than 90 days, delete after 180, always keep the newest 3"
   execution_role = aws_iam_role.lifecycle_policy.arn
   resource_type  = "AMI_IMAGE"
   status         = "ENABLED"
@@ -750,9 +777,10 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
       type = "DEPRECATE"
     }
     filter {
-      type  = "AGE"
-      value = 90
-      unit  = "DAYS"
+      type            = "AGE"
+      value           = 90
+      unit            = "DAYS"
+      retain_at_least = 3
     }
   }
 
@@ -765,9 +793,10 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
       }
     }
     filter {
-      type  = "AGE"
-      value = 180
-      unit  = "DAYS"
+      type            = "AGE"
+      value           = 180
+      unit            = "DAYS"
+      retain_at_least = 3
     }
     exclusion_rules {
       amis {
@@ -792,9 +821,7 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
     Project   = var.project
   }
 
-  depends_on = [
-    aws_iam_role_policy_attachment.lifecycle_policy
-  ]
+  depends_on = [aws_iam_role_policy_attachment.lifecycle_policy]
 }
 
 # --------------------------------------------------------------------------------
@@ -977,6 +1004,12 @@ resource "aws_config_config_rule" "approved_amis_by_tag" {
   source {
     owner             = "AWS"
     source_identifier = "APPROVED_AMIS_BY_TAG"
+  }
+
+  scope {
+    compliance_resource_types = ["AWS::EC2::Instance"]
+    tag_key                   = var.workload_tag_key
+    tag_value                 = var.workload_tag_value
   }
 
   input_parameters = jsonencode({
@@ -1223,7 +1256,7 @@ module "cloudtrail_logs" {
         Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:GetBucketAcl"
-        Resource  = module.cloudtrail_logs.arn
+        Resource  = "arn:aws:s3:::${local.cloudtrail_bucket}"
         Condition = {
           StringEquals = { "AWS:SourceArn" = "arn:aws:cloudtrail:${var.primary_region}:${data.aws_caller_identity.current.account_id}:trail/ami-factory-trail" }
         }
@@ -1233,7 +1266,7 @@ module "cloudtrail_logs" {
         Effect    = "Allow"
         Principal = { Service = "cloudtrail.amazonaws.com" }
         Action    = "s3:PutObject"
-        Resource  = "${module.cloudtrail_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+        Resource  = "arn:aws:s3:::${local.cloudtrail_bucket}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
         Condition = {
           StringEquals = {
             "s3:x-amz-acl"  = "bucket-owner-full-control"
@@ -1247,8 +1280,8 @@ module "cloudtrail_logs" {
         Principal = "*"
         Action    = "s3:*"
         Resource = [
-          module.cloudtrail_logs.arn,
-          "${module.cloudtrail_logs.arn}/*"
+          "arn:aws:s3:::${local.cloudtrail_bucket}",
+          "arn:aws:s3:::${local.cloudtrail_bucket}/*"
         ]
         Condition = {
           Bool = { "aws:SecureTransport" = "false" }
@@ -1340,6 +1373,9 @@ module "ami_factory_inspector_events_rule" {
       status   = ["ACTIVE"]
       resources = {
         type = ["AWS_EC2_INSTANCE"]
+        tags = {
+          Purpose = ["ami-factory-build"]
+        }
       }
     }
   })
@@ -1464,17 +1500,33 @@ resource "aws_cloudwatch_log_metric_filter" "kms_access_denied" {
 }
 
 # KMS key usage anomaly — unexpected spikes = possible unauthorized decryption
-module "kms_key_usage_spike" {
-  source              = "./modules/cloudwatch/cloudwatch-alarm"
+# module "kms_key_usage_spike" {
+#   source              = "./modules/cloudwatch/cloudwatch-alarm"
+#   alarm_name          = "ami-factory-kms-usage-spike"
+#   comparison_operator = "GreaterThanThreshold"
+#   evaluation_periods  = 2
+#   metric_name         = "KMSKeyUsage"
+#   namespace           = "AMIFactory/KMS"
+#   period              = 300
+#   statistic           = "Sum"
+#   threshold           = 500
+#   alarm_description   = "Unusual Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
+#   alarm_actions       = [module.ami_security_sns.topic_arn]
+#   ok_actions          = [module.ami_security_sns.topic_arn]
+# }
+
+resource "aws_cloudwatch_metric_alarm" "kms_key_usage_spike" {
   alarm_name          = "ami-factory-kms-usage-spike"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
   metric_name         = "KMSKeyUsage"
   namespace           = "AMIFactory/KMS"
   period              = 300
   statistic           = "Sum"
-  threshold           = 500
-  alarm_description   = "Unusual Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
+  threshold           = var.kms_usage_spike_threshold
+  treat_missing_data  = "notBreaching"
+  alarm_description   = "Sustained Decrypt/GenerateDataKey volume on ami-encryption-key (from CloudTrail). Possible unauthorized AMI access."
   alarm_actions       = [module.ami_security_sns.topic_arn]
   ok_actions          = [module.ami_security_sns.topic_arn]
 }

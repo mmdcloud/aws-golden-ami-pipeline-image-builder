@@ -116,4 +116,34 @@ variable "shared_account_ids" {
   default     = []
 }
 
+variable "kms_usage_spike_threshold" {
+  description = "Sum of KMS calls per 5 min. Set to roughly 1.5x the peak seen during normal builds."
+  type        = number
+  default     = 500
+}
 
+variable "workload_tag_key" {
+  type    = string
+  default = "Environment"
+}
+
+variable "workload_tag_value" {
+  type    = string
+  default = "production"
+}
+
+variable "releases" {
+  description = "Immutable hardening releases. Keep a release until all images built from it are gone."
+  type = map(object({
+    component_file = string
+  }))
+  default = {
+    "1.0.0" = { component_file = "components/security_hardening_1.0.0.yaml" }
+  }
+}
+
+variable "active_release" {
+  description = "Release the pipeline builds from. Must be a key in var.releases."
+  type        = string
+  default     = "1.0.0"
+}
