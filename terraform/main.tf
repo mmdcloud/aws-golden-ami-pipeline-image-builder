@@ -824,6 +824,86 @@ resource "aws_imagebuilder_lifecycle_policy" "golden_ami" {
   depends_on = [aws_iam_role_policy_attachment.lifecycle_policy]
 }
 
+# ---------------------------------------------------------------------------------
+# AWS RECYCLE BIN (RBin) — Accidental & Malicious AMI Deletion Protection
+# ---------------------------------------------------------------------------------
+resource "aws_rbin_rule" "golden_ami" {
+  description   = "Recycle Bin retention rule for ${var.project} Golden AMIs — ${var.primary_region}"
+  resource_type = "EC2_IMAGE"
+
+  retention_period {
+    retention_period_unit  = "DAYS"
+    retention_period_value = var.ami_recycle_bin_retention_days
+  }
+
+  dynamic "resource_tags" {
+    for_each = var.ami_recycle_bin_tag_key != null ? [1] : []
+    content {
+      resource_tag_key   = var.ami_recycle_bin_tag_key
+      resource_tag_value = coalesce(var.ami_recycle_bin_tag_value, var.project)
+    }
+  }
+
+  tags = {
+    Name        = "${var.project}-ami-recycle-bin-rule"
+    ManagedBy   = "terraform"
+    Project     = var.project
+    Environment = "production"
+  }
+}
+
+resource "aws_rbin_rule" "golden_ami_eu_west" {
+  provider      = aws.eu_west
+  description   = "Recycle Bin retention rule for ${var.project} Golden AMIs — eu-west-1"
+  resource_type = "EC2_IMAGE"
+
+  retention_period {
+    retention_period_unit  = "DAYS"
+    retention_period_value = var.ami_recycle_bin_retention_days
+  }
+
+  dynamic "resource_tags" {
+    for_each = var.ami_recycle_bin_tag_key != null ? [1] : []
+    content {
+      resource_tag_key   = var.ami_recycle_bin_tag_key
+      resource_tag_value = coalesce(var.ami_recycle_bin_tag_value, var.project)
+    }
+  }
+
+  tags = {
+    Name        = "${var.project}-ami-recycle-bin-rule-eu-west-1"
+    ManagedBy   = "terraform"
+    Project     = var.project
+    Environment = "production"
+  }
+}
+
+resource "aws_rbin_rule" "golden_ami_ap_southeast" {
+  provider      = aws.ap_southeast
+  description   = "Recycle Bin retention rule for ${var.project} Golden AMIs — ap-southeast-1"
+  resource_type = "EC2_IMAGE"
+
+  retention_period {
+    retention_period_unit  = "DAYS"
+    retention_period_value = var.ami_recycle_bin_retention_days
+  }
+
+  dynamic "resource_tags" {
+    for_each = var.ami_recycle_bin_tag_key != null ? [1] : []
+    content {
+      resource_tag_key   = var.ami_recycle_bin_tag_key
+      resource_tag_value = coalesce(var.ami_recycle_bin_tag_value, var.project)
+    }
+  }
+
+  tags = {
+    Name        = "${var.project}-ami-recycle-bin-rule-ap-southeast-1"
+    ManagedBy   = "terraform"
+    Project     = var.project
+    Environment = "production"
+  }
+}
+
 # --------------------------------------------------------------------------------
 # SNS Topic
 # --------------------------------------------------------------------------------

@@ -1,15 +1,17 @@
-primary_region        = "us-east-1"
-public_subnets        = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-private_subnets       = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-azs                   = ["us-east-1a", "us-east-1b", "us-east-1c"]
-notification_email    = "madmaxcloudonline@gmail.com"
-project               = "image-builder"
-recipe_version        = "1.0.0"
-create_vpc            = false # Set to false to use default/existing VPC (bypasses SCP deny on ec2:CreateVpc)
-force_destroy_buckets = true
-enable_inspector      = false # Set to true if Amazon Inspector EC2 scanning is active in this account/organization
-enable_security_hub   = false # Set to true if Security Hub standards should be subscribed (includes 20m timeout)
-shared_account_ids    = []    # Add external AWS account IDs to share golden AMIs across accounts/landing zones
+primary_region                 = "us-east-1"
+public_subnets                 = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+private_subnets                = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+azs                            = ["us-east-1a", "us-east-1b", "us-east-1c"]
+notification_email             = "madmaxcloudonline@gmail.com"
+project                        = "image-builder"
+recipe_version                 = "1.0.0"
+create_vpc                     = false # Set to false to use default/existing VPC (bypasses SCP deny on ec2:CreateVpc)
+force_destroy_buckets          = true
+enable_inspector               = false # Set to true if Amazon Inspector EC2 scanning is active in this account/organization
+enable_security_hub            = false # Set to true if Security Hub standards should be subscribed (includes 20m timeout)
+shared_account_ids             = []    # Add external AWS account IDs to share golden AMIs across accounts/landing zones
+ami_recycle_bin_retention_days = 14    # Days to retain deleted AMIs in AWS Recycle Bin for accidental deletion protection
+
 
 
 

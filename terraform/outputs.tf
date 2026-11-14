@@ -87,3 +87,20 @@ output "security_sns_topic_arn" {
   description = "ARN of the SNS topic for Inspector, Security Hub and KMS security alerts."
   value       = module.ami_security_sns.topic_arn
 }
+
+# ── Data Protection & Recovery ────────────────────────────────────────────────
+
+output "recycle_bin_rule_arn_primary" {
+  description = "ARN of the Recycle Bin retention rule for AMIs in the primary region."
+  value       = aws_rbin_rule.golden_ami.arn
+}
+
+output "recycle_bin_rule_arn_eu_west" {
+  description = "ARN of the Recycle Bin retention rule for AMIs in eu-west-1."
+  value       = aws_rbin_rule.golden_ami_eu_west.arn
+}
+
+output "recycle_bin_rule_arn_ap_southeast" {
+  description = "ARN of the Recycle Bin retention rule for AMIs in ap-southeast-1."
+  value       = aws_rbin_rule.golden_ami_ap_southeast.arn
+}

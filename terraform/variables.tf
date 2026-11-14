@@ -147,3 +147,26 @@ variable "active_release" {
   type        = string
   default     = "1.0.0"
 }
+
+variable "ami_recycle_bin_retention_days" {
+  description = "Number of days (1-365) to retain deleted Golden AMIs in the AWS Recycle Bin before permanent deletion."
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = var.ami_recycle_bin_retention_days >= 1 && var.ami_recycle_bin_retention_days <= 365
+    error_message = "ami_recycle_bin_retention_days must be between 1 and 365 days."
+  }
+}
+
+variable "ami_recycle_bin_tag_key" {
+  description = "Tag key used to scope the Recycle Bin rule to Golden AMIs. Set to null for an account/region-wide AMI rule."
+  type        = string
+  default     = "Project"
+}
+
+variable "ami_recycle_bin_tag_value" {
+  description = "Tag value used to scope the Recycle Bin rule. If left null, defaults to var.project."
+  type        = string
+  default     = null
+}
