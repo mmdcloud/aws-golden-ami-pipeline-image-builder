@@ -138,7 +138,7 @@ variable "releases" {
     component_file = string
   }))
   default = {
-    "1.0.0" = { component_file = "components/security_hardening_1.0.0.yaml" }
+    "1.0.0" = { component_file = "components/security_hardening.yaml" }
   }
 }
 

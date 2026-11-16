@@ -727,7 +727,7 @@ resource "aws_imagebuilder_distribution_configuration" "multi_region" {
 resource "aws_imagebuilder_image_pipeline" "golden_ami" {
   name                             = "golden-ami-pipeline"
   description                      = "Pipeline for building Golden AMIs"
-  image_recipe_arn                 = aws_imagebuilder_image_recipe.base_linux.arn
+  image_recipe_arn                 = aws_imagebuilder_image_recipe.base_linux[var.active_release].arn
   infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.golden_ami.arn
   distribution_configuration_arn   = aws_imagebuilder_distribution_configuration.multi_region.arn
 
@@ -1088,8 +1088,6 @@ resource "aws_config_config_rule" "approved_amis_by_tag" {
 
   scope {
     compliance_resource_types = ["AWS::EC2::Instance"]
-    tag_key                   = var.workload_tag_key
-    tag_value                 = var.workload_tag_value
   }
 
   input_parameters = jsonencode({

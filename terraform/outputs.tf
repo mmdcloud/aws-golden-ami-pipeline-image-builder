@@ -7,7 +7,7 @@ output "image_pipeline_arn" {
 
 output "image_recipe_arn" {
   description = "ARN of the base Linux image recipe (version-locked). Reference this when creating additional pipelines that should share the same hardened base."
-  value       = aws_imagebuilder_image_recipe.base_linux.arn
+  value       = aws_imagebuilder_image_recipe.base_linux[var.active_release].arn
 }
 
 output "infrastructure_config_arn" {
