@@ -41,7 +41,12 @@ An enterprise-grade, automated Golden AMI pipeline using AWS EC2 Image Builder w
 
 - **Automated Weekly Builds**: Scheduled pipeline execution every Sunday
 - **Multi-Region Distribution**: Automatic AMI distribution to us-east-1, eu-west-1, and ap-southeast-1
-- **Security Hardening**: Custom security components including root login disable and security tools
+- **Production Container Recipe**: Automated Docker/OCI container builds via AWS EC2 Image Builder pushed to Amazon ECR
+- **ECR Repository with KMS & Scanning**: Dedicated ECR repo with KMS customer-managed encryption, scan-on-push, and automated 14-day untagged lifecycle expiration
+- **Security Hardening**:
+  - Golden AMI: CIS Level 2 aligned security hardening for Ubuntu 24.04 LTS (SSH, kernel sysctl, PAM faillock, AppArmor, auditd)
+  - Golden Container: Non-root user (`appuser` UID 10001), SUID/SGID bit stripping, minimal attack surface, umask 027
+  - Container Host Runtime: Production-grade hardened Docker Engine & containerd runtime for AMI workloads
 - **Pre-installed Components**: 
   - AWS Systems Manager Agent
   - Amazon CloudWatch Agent

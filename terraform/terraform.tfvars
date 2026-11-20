@@ -12,6 +12,11 @@ enable_security_hub            = false # Set to true if Security Hub standards s
 shared_account_ids             = []    # Add external AWS account IDs to share golden AMIs across accounts/landing zones
 ami_recycle_bin_retention_days = 14    # Days to retain deleted AMIs in AWS Recycle Bin for accidental deletion protection
 
-
-
+# Container Recipe & ECR Pipeline
+enable_container_recipe        = true
+container_recipe_version       = "1.0.0"
+container_parent_image         = "public.ecr.aws/ubuntu/ubuntu:24.04"
+container_repository_name      = "golden-container"
+container_image_tag_mutability = "MUTABLE"
+enable_container_pipeline      = true
 

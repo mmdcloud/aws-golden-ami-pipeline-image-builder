@@ -1,0 +1,48 @@
+name: ContainerSecurityHardening
+description: CIS-aligned production grade security hardening for Golden Container images
+schemaVersion: 1.0
+phases:
+  - name: build
+    steps:
+      - name: UpdateBasePackages
+        action: ExecuteBash
+        inputs:
+          commands:
+            - export DEBIAN_FRONTEND=noninteractive
+            - apt-get update -y
+            - apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+            - apt-get install -y --no-install-recommends ca-certificates curl tzdata
+            - update-ca-certificates
+
+      - name: CreateNonRootUser
+        action: ExecuteBash
+        inputs:
+          commands:
+            - groupadd -g 10001 appuser
+            - useradd -u 10001 -g appuser -s /bin/bash -m -d /home/appuser appuser
+            - chmod 750 /home/appuser
+
+      - name: RestrictPermissionsAndSanitize
+        action: ExecuteBash
+        inputs:
+          commands:
+            - echo "umask 027" >> /etc/bash.bashrc
+            - echo "umask 027" >> /etc/profile
+            # Remove dangerous SUID/SGID bits to prevent container privilege escalation
+            - find / -xdev -perm /6000 -type f -not -path "/proc/*" -not -path "/sys/*" -exec chmod ug-s {} \; 2>/dev/null || true
+            # Clean package manager cache and lists to minimize image size and attack surface
+            - apt-get autoremove -y
+            - apt-get clean
+            - rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/cache/* /root/.bash_history
+
+  - name: validate
+    steps:
+      - name: ValidateContainerHardening
+        action: ExecuteBash
+        inputs:
+          commands:
+            - "id appuser || exit 1"
+            - '[ "$(id -u appuser)" = "10001" ] || exit 1'
+            - '[ "$(id -g appuser)" = "10001" ] || exit 1'
+            - '[ -d /home/appuser ] || exit 1'
+            - 'echo "Container security hardening validation passed"'

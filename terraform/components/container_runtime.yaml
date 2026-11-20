@@ -1,0 +1,65 @@
+name: ContainerRuntimeDocker
+description: Production-grade Docker Engine and containerd runtime installation with security hardening for EC2 instances
+schemaVersion: 1.0
+phases:
+  - name: build
+    steps:
+      - name: InstallDockerPrerequisites
+        action: ExecuteBash
+        inputs:
+          commands:
+            - export DEBIAN_FRONTEND=noninteractive
+            - apt-get update -y
+            - apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release
+            - install -m 0755 -d /etc/apt/keyrings
+            - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            - chmod a+r /etc/apt/keyrings/docker.asc
+            - |
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+            - apt-get update -y
+
+      - name: InstallDockerPackages
+        action: ExecuteBash
+        inputs:
+          commands:
+            - export DEBIAN_FRONTEND=noninteractive
+            - apt-get install -y --no-install-recommends docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      - name: ConfigureHardenedDockerDaemon
+        action: ExecuteBash
+        inputs:
+          commands:
+            - mkdir -p /etc/docker
+            - |
+              cat > /etc/docker/daemon.json << 'EOF'
+              {
+                "icc": false,
+                "no-new-privileges": true,
+                "live-restore": true,
+                "userland-proxy": false,
+                "log-driver": "json-file",
+                "log-opts": {
+                  "max-size": "50m",
+                  "max-file": "5"
+                },
+                "storage-driver": "overlay2"
+              }
+              EOF
+            - chmod 600 /etc/docker/daemon.json
+            - systemctl enable docker
+            - systemctl enable containerd
+            - systemctl restart docker 2>/dev/null || true
+
+  - name: validate
+    steps:
+      - name: ValidateDockerInstallation
+        action: ExecuteBash
+        inputs:
+          commands:
+            - docker --version || exit 1
+            - containerd --version || exit 1
+            - docker compose version || exit 1
+            - '[ -f /etc/docker/daemon.json ] || exit 1'
+            - grep -q '"icc": false' /etc/docker/daemon.json || exit 1
+            - grep -q '"no-new-privileges": true' /etc/docker/daemon.json || exit 1
+            - 'echo "Docker runtime validation passed"'

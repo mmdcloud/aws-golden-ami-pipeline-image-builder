@@ -4,3 +4,11 @@ private_subnets    = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 azs                = ["us-east-1a", "us-east-1b", "us-east-1c"]
 notification_email = "your-email"
 project            = "image-builder"
+
+# Container Recipe & ECR Pipeline
+enable_container_recipe        = true
+container_recipe_version       = "1.0.0"
+container_parent_image         = "public.ecr.aws/ubuntu/ubuntu:24.04"
+container_repository_name      = "golden-container"
+container_image_tag_mutability = "MUTABLE"
+enable_container_pipeline      = true
